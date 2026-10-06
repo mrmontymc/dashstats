@@ -1,0 +1,6 @@
+{
+  "name": "CalcioMetrics",
+  "description": "Piattaforma avanzata di analisi e predizione calcistica da file CSV con dashboard in tempo reale e modelli previsionali di performance.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
