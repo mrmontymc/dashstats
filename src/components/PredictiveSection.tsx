@@ -11,7 +11,11 @@ import {
   ChevronRight,
   Filter,
   Sliders,
-  Award
+  Award,
+  Goal,
+  Flag,
+  Trophy,
+  Layers
 } from 'lucide-react';
 import { Match, TeamStats, TeamPredictiveProfile, AnalysisConfig } from '../types/football';
 import { computePredictiveProfiles } from '../utils/predictiveEngine';
@@ -37,6 +41,7 @@ export const PredictiveSection: React.FC<PredictiveSectionProps> = ({
 }) => {
   const [filterArchetype, setFilterArchetype] = useState<string>('all');
   const [activeTab, setActiveTab] = useState<'momentum' | 'projections' | 'regression' | 'archetypes' | 'elo'>('momentum');
+  const [monteCarloMetric, setMonteCarloMetric] = useState<'points' | 'goals' | 'corners' | 'all'>('points');
 
   // Calcola profili predittivi iterando su tutti i dati
   const profiles = React.useMemo(() => {
@@ -372,93 +377,495 @@ export const PredictiveSection: React.FC<PredictiveSectionProps> = ({
         </div>
       )}
 
-      {/* View 2: Monte Carlo Projections */}
+      {/* View 2: Monte Carlo Projections Extended to Points, GF, GS, and Corners */}
       {activeTab === 'projections' && (
-        <div className="bg-slate-900/60 border border-slate-800 rounded-lg overflow-hidden">
-          <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400">
-            <span>Stima probabilistica punti finali (Intervallo di confidenza 10°-90° percentile)</span>
-            <span className="font-mono text-slate-500">Simulazione basata su calendario a 38 giornate</span>
+        <div className="space-y-4">
+          {/* Sub-selector for Monte Carlo parameters */}
+          <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3 flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="p-1 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                <Sparkles className="w-4 h-4" />
+              </span>
+              <div>
+                <span className="text-xs font-bold text-white uppercase tracking-wider block">
+                  Simulazione Monte Carlo Multivariata (38 Giornate)
+                </span>
+                <span className="text-[11px] text-slate-400 font-mono">
+                  Iterazioni congiunte su Punti, Gol Fatti (GF), Gol Subiti (GS) e Calci d'Angolo
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5 font-mono text-xs">
+              <button
+                onClick={() => setMonteCarloMetric('points')}
+                className={`px-2.5 py-1.5 rounded transition-colors flex items-center gap-1.5 ${
+                  monteCarloMetric === 'points'
+                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-semibold'
+                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
+              >
+                <Trophy className="w-3.5 h-3.5" />
+                <span>Punti & Classifica</span>
+              </button>
+              <button
+                onClick={() => setMonteCarloMetric('goals')}
+                className={`px-2.5 py-1.5 rounded transition-colors flex items-center gap-1.5 ${
+                  monteCarloMetric === 'goals'
+                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-semibold'
+                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
+              >
+                <Goal className="w-3.5 h-3.5" />
+                <span>GF & GS (Gol Fatti / Subiti)</span>
+              </button>
+              <button
+                onClick={() => setMonteCarloMetric('corners')}
+                className={`px-2.5 py-1.5 rounded transition-colors flex items-center gap-1.5 ${
+                  monteCarloMetric === 'corners'
+                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-semibold'
+                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
+              >
+                <Flag className="w-3.5 h-3.5" />
+                <span>Corner (Calci d'Angolo)</span>
+              </button>
+              <button
+                onClick={() => setMonteCarloMetric('all')}
+                className={`px-2.5 py-1.5 rounded transition-colors flex items-center gap-1.5 ${
+                  monteCarloMetric === 'all'
+                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-semibold'
+                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>Matrice Completa</span>
+              </button>
+            </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs whitespace-nowrap">
-              <thead className="bg-slate-950/80 text-slate-400 font-mono border-b border-slate-800 text-[11px] uppercase tracking-wider">
-                <tr>
-                  <th className="py-2.5 px-3">Squadra</th>
-                  <th className="py-2.5 px-2.5 text-right">Punti Attuali</th>
-                  <th className="py-2.5 px-3 text-right">Punti Proiettati (Mediana)</th>
-                  <th className="py-2.5 px-3 text-center min-w-[160px]">Range Previsto [P10 - P90]</th>
-                  <th className="py-2.5 px-3 text-right">Prob. Scudetto</th>
-                  <th className="py-2.5 px-3 text-right">Prob. Top 4 (UCL)</th>
-                  <th className="py-2.5 px-3 text-right">Rischio Retrocessione</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/60 font-mono">
-                {[...profiles]
-                  .sort((a, b) => b.projectedPointsMedian - a.projectedPointsMedian)
-                  .map((p) => {
-                    const ts = standings.find((s) => s.team === p.team);
-                    const currentPts = ts ? ts.points : 0;
-                    const isSelected = selectedTeam === p.team;
+          {/* Highlights KPI Cards for Monte Carlo Projections */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 font-mono">
+            {/* Best Attack */}
+            {(() => {
+              const bestAtt = [...profiles].sort((a, b) => b.projectedGoalsForMedian - a.projectedGoalsForMedian)[0];
+              return (
+                <div className="bg-slate-900/60 border border-slate-800 rounded-lg p-3">
+                  <div className="text-[10px] text-slate-400 uppercase flex items-center justify-between mb-1">
+                    <span>Miglior Attacco Stimato</span>
+                    <Goal className="w-3.5 h-3.5 text-emerald-400" />
+                  </div>
+                  <div className="text-sm font-bold text-slate-200 font-sans truncate">{bestAtt?.team}</div>
+                  <div className="text-xs text-emerald-400 font-semibold mt-1">
+                    {bestAtt?.projectedGoalsForMedian} GF medi{' '}
+                    <span className="text-[10px] text-slate-500 font-normal">
+                      [{bestAtt?.projectedGoalsForRange[0]}-{bestAtt?.projectedGoalsForRange[1]}]
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
 
-                    return (
-                      <tr
-                        key={p.team}
-                        onClick={() => onSelectTeam(p.team)}
-                        className={`hover:bg-slate-800/50 cursor-pointer transition-colors ${
-                          isSelected ? 'bg-slate-800/80' : ''
-                        }`}
-                      >
-                        <td className="py-2.5 px-3 font-sans font-medium text-slate-200">
-                          {p.team}
-                        </td>
-                        <td className="py-2.5 px-2.5 text-right tabular-nums text-slate-400">
-                          {currentPts}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-bold text-emerald-400 tabular-nums text-sm">
-                          {p.projectedPointsMedian} pt
-                        </td>
-                        <td className="py-2.5 px-3 text-center">
-                          <div className="flex items-center justify-center gap-2 text-slate-400 text-xs tabular-nums">
-                            <span>{p.projectedPointsRange[0]}</span>
-                            <div className="w-24 h-1.5 bg-slate-800 rounded-full relative">
-                              <div
-                                className="absolute top-0 bottom-0 bg-emerald-500/70 rounded-full"
-                                style={{
-                                  left: `${Math.min(100, (p.projectedPointsRange[0] / 100) * 100)}%`,
-                                  right: `${Math.max(0, 100 - (p.projectedPointsRange[1] / 100) * 100)}%`,
-                                }}
-                              ></div>
-                            </div>
-                            <span>{p.projectedPointsRange[1]}</span>
-                          </div>
-                        </td>
-                        <td className="py-2.5 px-3 text-right tabular-nums">
-                          {p.titleProbability > 0 ? (
-                            <span className="text-amber-400 font-semibold">{p.titleProbability}%</span>
-                          ) : (
-                            <span className="text-slate-600">&lt;1%</span>
-                          )}
-                        </td>
-                        <td className="py-2.5 px-3 text-right tabular-nums">
-                          {p.top4Probability > 0 ? (
-                            <span className="text-emerald-400 font-medium">{p.top4Probability}%</span>
-                          ) : (
-                            <span className="text-slate-600">&lt;1%</span>
-                          )}
-                        </td>
-                        <td className="py-2.5 px-3 text-right tabular-nums">
-                          {p.relegationProbability > 0 ? (
-                            <span className="text-rose-400 font-semibold">{p.relegationProbability}%</span>
-                          ) : (
-                            <span className="text-slate-600">&lt;1%</span>
-                          )}
-                        </td>
+            {/* Best Defense */}
+            {(() => {
+              const bestDef = [...profiles].sort((a, b) => a.projectedGoalsAgainstMedian - b.projectedGoalsAgainstMedian)[0];
+              return (
+                <div className="bg-slate-900/60 border border-slate-800 rounded-lg p-3">
+                  <div className="text-[10px] text-slate-400 uppercase flex items-center justify-between mb-1">
+                    <span>Fortezza Difensiva Stimata</span>
+                    <Shield className="w-3.5 h-3.5 text-cyan-400" />
+                  </div>
+                  <div className="text-sm font-bold text-slate-200 font-sans truncate">{bestDef?.team}</div>
+                  <div className="text-xs text-cyan-400 font-semibold mt-1">
+                    {bestDef?.projectedGoalsAgainstMedian} GS medi{' '}
+                    <span className="text-[10px] text-slate-500 font-normal">
+                      [{bestDef?.projectedGoalsAgainstRange[0]}-{bestDef?.projectedGoalsAgainstRange[1]}]
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Corner Leader */}
+            {(() => {
+              const bestCorner = [...profiles].sort((a, b) => b.projectedCornersMedian - a.projectedCornersMedian)[0];
+              const ts = standings.find((s) => s.team === bestCorner?.team);
+              const perGame = ts && ts.played > 0 ? (bestCorner.projectedCornersMedian / 38).toFixed(1) : '5.8';
+              return (
+                <div className="bg-slate-900/60 border border-slate-800 rounded-lg p-3">
+                  <div className="text-[10px] text-slate-400 uppercase flex items-center justify-between mb-1">
+                    <span>Top Volume Corner Stimato</span>
+                    <Flag className="w-3.5 h-3.5 text-amber-400" />
+                  </div>
+                  <div className="text-sm font-bold text-slate-200 font-sans truncate">{bestCorner?.team}</div>
+                  <div className="text-xs text-amber-400 font-semibold mt-1">
+                    {bestCorner?.projectedCornersMedian} Corner{' '}
+                    <span className="text-[10px] text-slate-500 font-normal">
+                      (~{perGame}/gara · [{bestCorner?.projectedCornersRange[0]}-{bestCorner?.projectedCornersRange[1]}])
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Best Goal Diff */}
+            {(() => {
+              const bestDiff = [...profiles].sort((a, b) => b.projectedGoalDiffMedian - a.projectedGoalDiffMedian)[0];
+              return (
+                <div className="bg-slate-900/60 border border-slate-800 rounded-lg p-3">
+                  <div className="text-[10px] text-slate-400 uppercase flex items-center justify-between mb-1">
+                    <span>Diff. Reti Dominante</span>
+                    <TrendingUp className="w-3.5 h-3.5 text-purple-400" />
+                  </div>
+                  <div className="text-sm font-bold text-slate-200 font-sans truncate">{bestDiff?.team}</div>
+                  <div className="text-xs text-purple-400 font-semibold mt-1">
+                    {bestDiff?.projectedGoalDiffMedian > 0 ? `+${bestDiff?.projectedGoalDiffMedian}` : bestDiff?.projectedGoalDiffMedian} DR Finale
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Sub-view Table Rendering */}
+          <div className="bg-slate-900/60 border border-slate-800 rounded-lg overflow-hidden">
+            {/* View 1: Punti & Classifica */}
+            {monteCarloMetric === 'points' && (
+              <>
+                <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400">
+                  <span>Stima probabilistica punti finali (Intervallo di confidenza 10°-90° percentile)</span>
+                  <span className="font-mono text-slate-500">Simulazione basata su calendario a 38 giornate</span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs whitespace-nowrap">
+                    <thead className="bg-slate-950/80 text-slate-400 font-mono border-b border-slate-800 text-[11px] uppercase tracking-wider">
+                      <tr>
+                        <th className="py-2.5 px-3">Squadra</th>
+                        <th className="py-2.5 px-2.5 text-right">Punti Attuali</th>
+                        <th className="py-2.5 px-3 text-right">Punti Proiettati (Mediana)</th>
+                        <th className="py-2.5 px-3 text-center min-w-[160px]">Range Previsto [P10 - P90]</th>
+                        <th className="py-2.5 px-3 text-right">Prob. Scudetto</th>
+                        <th className="py-2.5 px-3 text-right">Prob. Top 4 (UCL)</th>
+                        <th className="py-2.5 px-3 text-right">Rischio Retrocessione</th>
                       </tr>
-                    );
-                  })}
-              </tbody>
-            </table>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 font-mono">
+                      {[...profiles]
+                        .sort((a, b) => b.projectedPointsMedian - a.projectedPointsMedian)
+                        .map((p) => {
+                          const ts = standings.find((s) => s.team === p.team);
+                          const currentPts = ts ? ts.points : 0;
+                          const isSelected = selectedTeam === p.team;
+
+                          return (
+                            <tr
+                              key={p.team}
+                              onClick={() => onSelectTeam(p.team)}
+                              className={`hover:bg-slate-800/50 cursor-pointer transition-colors ${
+                                isSelected ? 'bg-slate-800/80' : ''
+                              }`}
+                            >
+                              <td className="py-2.5 px-3 font-sans font-medium text-slate-200">
+                                {p.team}
+                              </td>
+                              <td className="py-2.5 px-2.5 text-right tabular-nums text-slate-400">
+                                {currentPts}
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-bold text-emerald-400 tabular-nums text-sm">
+                                {p.projectedPointsMedian} pt
+                              </td>
+                              <td className="py-2.5 px-3 text-center">
+                                <div className="flex items-center justify-center gap-2 text-slate-400 text-xs tabular-nums">
+                                  <span>{p.projectedPointsRange[0]}</span>
+                                  <div className="w-24 h-1.5 bg-slate-800 rounded-full relative">
+                                    <div
+                                      className="absolute top-0 bottom-0 bg-emerald-500/70 rounded-full"
+                                      style={{
+                                        left: `${Math.min(100, (p.projectedPointsRange[0] / 100) * 100)}%`,
+                                        right: `${Math.max(0, 100 - (p.projectedPointsRange[1] / 100) * 100)}%`,
+                                      }}
+                                    ></div>
+                                  </div>
+                                  <span>{p.projectedPointsRange[1]}</span>
+                                </div>
+                              </td>
+                              <td className="py-2.5 px-3 text-right tabular-nums">
+                                {p.titleProbability > 0 ? (
+                                  <span className="text-amber-400 font-semibold">{p.titleProbability}%</span>
+                                ) : (
+                                  <span className="text-slate-600">&lt;1%</span>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3 text-right tabular-nums">
+                                {p.top4Probability > 0 ? (
+                                  <span className="text-emerald-400 font-medium">{p.top4Probability}%</span>
+                                ) : (
+                                  <span className="text-slate-600">&lt;1%</span>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3 text-right tabular-nums">
+                                {p.relegationProbability > 0 ? (
+                                  <span className="text-rose-400 font-semibold">{p.relegationProbability}%</span>
+                                ) : (
+                                  <span className="text-slate-600">&lt;1%</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+
+            {/* View 2: GF & GS (Gol Fatti e Gol Subiti) */}
+            {monteCarloMetric === 'goals' && (
+              <>
+                <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400">
+                  <span>Proiezione Monte Carlo Produzione Offensiva (GF) e Tenuta Difensiva (GS)</span>
+                  <span className="font-mono text-slate-500">Intervallo di confidenza [P10 - P90] con DR finale</span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs whitespace-nowrap">
+                    <thead className="bg-slate-950/80 text-slate-400 font-mono border-b border-slate-800 text-[11px] uppercase tracking-wider">
+                      <tr>
+                        <th className="py-2.5 px-3">Squadra</th>
+                        <th className="py-2.5 px-2.5 text-right">GF Attuali</th>
+                        <th className="py-2.5 px-2.5 text-right">Media GF/G</th>
+                        <th className="py-2.5 px-3 text-right text-emerald-400">GF Proiettati (Mediana)</th>
+                        <th className="py-2.5 px-3 text-center min-w-[130px]">Range GF [P10-P90]</th>
+                        <th className="py-2.5 px-2.5 text-right">GS Attuali</th>
+                        <th className="py-2.5 px-2.5 text-right">Media GS/G</th>
+                        <th className="py-2.5 px-3 text-right text-rose-400">GS Proiettati (Mediana)</th>
+                        <th className="py-2.5 px-3 text-center min-w-[130px]">Range GS [P10-P90]</th>
+                        <th className="py-2.5 px-3 text-right text-cyan-400 font-bold">DR Proiettata</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 font-mono">
+                      {[...profiles]
+                        .sort((a, b) => b.projectedGoalDiffMedian - a.projectedGoalDiffMedian)
+                        .map((p) => {
+                          const ts = standings.find((s) => s.team === p.team);
+                          const curGf = ts ? ts.goalsFor : 0;
+                          const curGa = ts ? ts.goalsAgainst : 0;
+                          const avgGf = ts && ts.played > 0 ? (ts.goalsFor / ts.played).toFixed(2) : '1.30';
+                          const avgGa = ts && ts.played > 0 ? (ts.goalsAgainst / ts.played).toFixed(2) : '1.20';
+                          const isSelected = selectedTeam === p.team;
+
+                          return (
+                            <tr
+                              key={p.team}
+                              onClick={() => onSelectTeam(p.team)}
+                              className={`hover:bg-slate-800/50 cursor-pointer transition-colors ${
+                                isSelected ? 'bg-slate-800/80' : ''
+                              }`}
+                            >
+                              <td className="py-2.5 px-3 font-sans font-medium text-slate-200">
+                                {p.team}
+                              </td>
+                              <td className="py-2.5 px-2.5 text-right tabular-nums text-slate-400">
+                                {curGf}
+                              </td>
+                              <td className="py-2.5 px-2.5 text-right tabular-nums text-slate-300">
+                                {avgGf}
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-bold text-emerald-400 tabular-nums">
+                                {p.projectedGoalsForMedian}
+                              </td>
+                              <td className="py-2.5 px-3 text-center text-slate-400 tabular-nums text-[11px]">
+                                [{p.projectedGoalsForRange[0]} - {p.projectedGoalsForRange[1]}]
+                              </td>
+                              <td className="py-2.5 px-2.5 text-right tabular-nums text-slate-400">
+                                {curGa}
+                              </td>
+                              <td className="py-2.5 px-2.5 text-right tabular-nums text-slate-300">
+                                {avgGa}
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-bold text-rose-400 tabular-nums">
+                                {p.projectedGoalsAgainstMedian}
+                              </td>
+                              <td className="py-2.5 px-3 text-center text-slate-400 tabular-nums text-[11px]">
+                                [{p.projectedGoalsAgainstRange[0]} - {p.projectedGoalsAgainstRange[1]}]
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-bold tabular-nums">
+                                <span className={p.projectedGoalDiffMedian > 0 ? 'text-emerald-400' : p.projectedGoalDiffMedian < 0 ? 'text-rose-400' : 'text-slate-400'}>
+                                  {p.projectedGoalDiffMedian > 0 ? `+${p.projectedGoalDiffMedian}` : p.projectedGoalDiffMedian}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+
+            {/* View 3: Calci d'Angolo (Corner) */}
+            {monteCarloMetric === 'corners' && (
+              <>
+                <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400">
+                  <span>Proiezione Monte Carlo Calci d'Angolo Battuti, Subiti e Range P10-P90</span>
+                  <span className="font-mono text-slate-500">Stima Poisson & EWMA su proiezione a 38 gare</span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs whitespace-nowrap">
+                    <thead className="bg-slate-950/80 text-slate-400 font-mono border-b border-slate-800 text-[11px] uppercase tracking-wider">
+                      <tr>
+                        <th className="py-2.5 px-3">Squadra</th>
+                        <th className="py-2.5 px-2.5 text-right">Corner Attuali</th>
+                        <th className="py-2.5 px-2.5 text-right">Media/Gara</th>
+                        <th className="py-2.5 px-3 text-right text-amber-400 font-bold">Corner Proiettati (Mediana)</th>
+                        <th className="py-2.5 px-3 text-center min-w-[150px]">Range Previsto [P10 - P90]</th>
+                        <th className="py-2.5 px-3 text-right">Corner Subiti/Gara</th>
+                        <th className="py-2.5 px-3 text-right">Differenziale Atteso</th>
+                        <th className="py-2.5 px-3 text-right">Attacco rating</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 font-mono">
+                      {[...profiles]
+                        .sort((a, b) => b.projectedCornersMedian - a.projectedCornersMedian)
+                        .map((p) => {
+                          const ts = standings.find((s) => s.team === p.team);
+                          const curCorn = ts?.cornersTotal ?? Math.round((ts?.played || 0) * 5.2);
+                          const avgPerMatch = ts && ts.played > 0 ? (curCorn / ts.played).toFixed(1) : '5.1';
+                          const cornersConceded = ts?.cornersConcededTotal ?? Math.round((ts?.played || 0) * 4.6);
+                          const avgConceded = ts && ts.played > 0 ? (cornersConceded / ts.played).toFixed(1) : '4.6';
+                          const diff = Number((Number(avgPerMatch) - Number(avgConceded)).toFixed(1));
+                          const isSelected = selectedTeam === p.team;
+
+                          return (
+                            <tr
+                              key={p.team}
+                              onClick={() => onSelectTeam(p.team)}
+                              className={`hover:bg-slate-800/50 cursor-pointer transition-colors ${
+                                isSelected ? 'bg-slate-800/80' : ''
+                              }`}
+                            >
+                              <td className="py-2.5 px-3 font-sans font-medium text-slate-200">
+                                {p.team}
+                              </td>
+                              <td className="py-2.5 px-2.5 text-right tabular-nums text-slate-400">
+                                {curCorn}
+                              </td>
+                              <td className="py-2.5 px-2.5 text-right tabular-nums text-slate-200 font-semibold">
+                                {avgPerMatch}
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-bold text-amber-400 tabular-nums text-sm">
+                                {p.projectedCornersMedian}
+                              </td>
+                              <td className="py-2.5 px-3 text-center">
+                                <div className="flex items-center justify-center gap-2 text-slate-400 text-xs tabular-nums">
+                                  <span>{p.projectedCornersRange[0]}</span>
+                                  <div className="w-20 h-1.5 bg-slate-800 rounded-full relative">
+                                    <div
+                                      className="absolute top-0 bottom-0 bg-amber-500/70 rounded-full"
+                                      style={{
+                                        left: `${Math.min(100, (p.projectedCornersRange[0] / 300) * 100)}%`,
+                                        right: `${Math.max(0, 100 - (p.projectedCornersRange[1] / 300) * 100)}%`,
+                                      }}
+                                    ></div>
+                                  </div>
+                                  <span>{p.projectedCornersRange[1]}</span>
+                                </div>
+                              </td>
+                              <td className="py-2.5 px-3 text-right tabular-nums text-slate-400">
+                                {avgConceded}
+                              </td>
+                              <td className="py-2.5 px-3 text-right tabular-nums font-semibold">
+                                <span className={diff > 0 ? 'text-emerald-400' : diff < 0 ? 'text-rose-400' : 'text-slate-400'}>
+                                  {diff > 0 ? `+${diff}` : diff}
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3 text-right tabular-nums text-slate-300">
+                                {(p.attackRating * 100).toFixed(0)}%
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+
+            {/* View 4: Matrice Completa (Tutti i Parametri) */}
+            {monteCarloMetric === 'all' && (
+              <>
+                <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400">
+                  <span>Panoramica Multi-Parametro Monte Carlo (Punti, GF, GS, DR e Corner)</span>
+                  <span className="font-mono text-slate-500">Valori mediani proiettati al termine del campionato</span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs whitespace-nowrap">
+                    <thead className="bg-slate-950/80 text-slate-400 font-mono border-b border-slate-800 text-[11px] uppercase tracking-wider">
+                      <tr>
+                        <th className="py-2.5 px-3">Squadra</th>
+                        <th className="py-2.5 px-2.5 text-right text-emerald-400 font-bold">Punti Proiettati</th>
+                        <th className="py-2.5 px-2.5 text-right text-teal-400">GF Proiettati</th>
+                        <th className="py-2.5 px-2.5 text-right text-rose-400">GS Proiettati</th>
+                        <th className="py-2.5 px-2.5 text-right font-bold">DR Proiettata</th>
+                        <th className="py-2.5 px-2.5 text-right text-amber-400 font-bold">Corner Proiettati</th>
+                        <th className="py-2.5 px-3">Archetipo Tattico</th>
+                        <th className="py-2.5 px-3 text-right">Prob. Top 4</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 font-mono">
+                      {[...profiles]
+                        .sort((a, b) => b.projectedPointsMedian - a.projectedPointsMedian)
+                        .map((p) => {
+                          const isSelected = selectedTeam === p.team;
+
+                          return (
+                            <tr
+                              key={p.team}
+                              onClick={() => onSelectTeam(p.team)}
+                              className={`hover:bg-slate-800/50 cursor-pointer transition-colors ${
+                                isSelected ? 'bg-slate-800/80' : ''
+                              }`}
+                            >
+                              <td className="py-2.5 px-3 font-sans font-medium text-slate-200">
+                                {p.team}
+                              </td>
+                              <td className="py-2.5 px-2.5 text-right font-bold text-emerald-400 tabular-nums text-sm">
+                                {p.projectedPointsMedian} pt
+                              </td>
+                              <td className="py-2.5 px-2.5 text-right tabular-nums text-teal-300">
+                                {p.projectedGoalsForMedian}
+                              </td>
+                              <td className="py-2.5 px-2.5 text-right tabular-nums text-rose-300">
+                                {p.projectedGoalsAgainstMedian}
+                              </td>
+                              <td className="py-2.5 px-2.5 text-right tabular-nums font-semibold">
+                                <span className={p.projectedGoalDiffMedian > 0 ? 'text-emerald-400' : p.projectedGoalDiffMedian < 0 ? 'text-rose-400' : 'text-slate-400'}>
+                                  {p.projectedGoalDiffMedian > 0 ? `+${p.projectedGoalDiffMedian}` : p.projectedGoalDiffMedian}
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-2.5 text-right tabular-nums text-amber-400 font-semibold">
+                                {p.projectedCornersMedian}
+                              </td>
+                              <td className="py-2.5 px-3 font-sans text-xs text-slate-400">
+                                {p.archetype}
+                              </td>
+                              <td className="py-2.5 px-3 text-right tabular-nums">
+                                {p.top4Probability > 0 ? (
+                                  <span className="text-emerald-400 font-medium">{p.top4Probability}%</span>
+                                ) : (
+                                  <span className="text-slate-600">&lt;1%</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

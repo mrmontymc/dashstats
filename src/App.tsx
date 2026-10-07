@@ -24,8 +24,8 @@ export default function App() {
   const [matches, setMatches] = useState<Match[]>(() => getSampleSerieAMatches());
   const [datasetName, setDatasetName] = useState<string>('Serie A TIM 2023/24');
 
-  // Navigazione schede
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'standings' | 'predictions' | 'odds' | 'simulator' | 'matches'>('dashboard');
+  // Navigazione schede (dashboard rimossa)
+  const [activeTab, setActiveTab] = useState<'standings' | 'predictions' | 'odds' | 'simulator' | 'matches'>('standings');
 
   // Stato filtri real-time
   const [filters, setFilters] = useState<FilterState>({
@@ -334,94 +334,6 @@ export default function App() {
         />
 
         {/* View Routing */}
-        {activeTab === 'dashboard' && (
-          <div className="space-y-6">
-            {/* Visual Performance Charts */}
-            <PerformanceCharts
-              matches={filteredMatches}
-              standings={filteredStandings.length > 0 ? filteredStandings : overallStandings}
-              selectedTeam={activeTeam}
-              onSelectTeam={handleOpenTeamModal}
-            />
-
-            {/* Quick Standings & Matches Overview - strictly aligned with filters */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2">
-                <StandingsTable
-                  standings={filteredStandings.length > 0 ? filteredStandings : overallStandings}
-                  selectedTeam={activeTeam}
-                  onSelectTeam={handleOpenTeamModal}
-                  isFiltered={hasActiveFilters}
-                  venue={filters.venue}
-                  onVenueChange={(v) => setFilters((prev) => ({ ...prev, venue: v }))}
-                />
-              </div>
-
-              {/* Predictive Fast Pulse Preview */}
-              <div className="bg-slate-900/60 border border-slate-800 rounded-lg p-4 flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-800">
-                    <h3 className="text-xs font-semibold text-slate-200">
-                      Barometro Predittivo & Trend
-                    </h3>
-                    <button
-                      onClick={() => setActiveTab('predictions')}
-                      className="text-xs text-emerald-400 hover:text-emerald-300 font-medium"
-                    >
-                      Analisi Completa →
-                    </button>
-                  </div>
-
-                  <p className="text-xs text-slate-400 mb-4 leading-relaxed">
-                    Sintesi dei picchi di momentum calcolati dall'algoritmo predittivo sulle gare filtrate:
-                  </p>
-
-                  <div className="space-y-2.5 font-mono text-xs">
-                    {predictiveProfiles.slice(0, 5).map((p) => (
-                      <div
-                        key={p.team}
-                        onClick={() => handleOpenTeamModal(p.team)}
-                        className="p-2.5 bg-slate-950/80 rounded border border-slate-800/80 hover:border-slate-700 cursor-pointer flex items-center justify-between"
-                      >
-                        <div>
-                          <div className="font-sans font-bold text-slate-100">{p.team}</div>
-                          <div className="text-[11px] text-slate-400">{p.archetype}</div>
-                        </div>
-
-                        <div className="text-right">
-                          <span
-                            className={`font-bold tabular-nums text-xs ${
-                              p.momentumScore > 0 ? 'text-emerald-400' : 'text-slate-400'
-                            }`}
-                          >
-                            {p.momentumScore > 0 ? `+${p.momentumScore}` : p.momentumScore}
-                          </span>
-                          <div className="text-[10px] text-slate-500">{p.momentumStatus}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between text-xs">
-                  <button
-                    onClick={() => setActiveTab('odds')}
-                    className="text-xs text-emerald-400 hover:text-emerald-300 font-medium"
-                  >
-                    Quote & Mercati Profittevoli →
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('simulator')}
-                    className="text-xs text-slate-300 hover:text-white underline underline-offset-4"
-                  >
-                    Simulatore Match
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
         {activeTab === 'standings' && (
           <div className="space-y-6">
             <StandingsTable

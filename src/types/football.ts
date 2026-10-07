@@ -190,6 +190,8 @@ export interface TeamStats {
   eloRank: number;     // Posizione nel ranking Elo
   homeDominanceRatio: number; // % punti conquistati in casa sul totale
   cornerDifferential: number; // Angoli battuti - Angoli subiti
+  cornersTotal?: number;       // Calci d'angolo battuti
+  cornersConcededTotal?: number; // Calci d'angolo concessi
   comebacksCount: number;     // Partite rimontate (punti ottenuti dopo essere stati in svantaggio al 1T)
 }
 
@@ -229,16 +231,23 @@ export interface TeamPredictiveProfile {
   archetype: TeamArchetype;
   archetypeDescription: string;
   
-  // Proiezione Monte Carlo
+  // Proiezione Monte Carlo estesa: Punti, Gol Fatti, Gol Subiti e Calci d'Angolo
   projectedPointsMedian: number;
   projectedPointsRange: [number, number]; // 10th - 90th percentile
+  projectedGoalsForMedian: number;        // GF mediano simulato
+  projectedGoalsForRange: [number, number];
+  projectedGoalsAgainstMedian: number;    // GS mediano simulato
+  projectedGoalsAgainstRange: [number, number];
+  projectedGoalDiffMedian: number;        // DR mediana
+  projectedCornersMedian: number;         // Calci d'angolo totali mediani simulati
+  projectedCornersRange: [number, number];
   titleProbability: number;     // %
   top4Probability: number;      // %
   relegationProbability: number;// %
 }
 
 export interface BettingAdviceTip {
-  market: string;              // e.g. "Over 2.5", "Esito 1", "Goal (BTTS)", "Doppia Chance 1X"
+  market: string;              // e.g. "Over 2.5", "Esito 1", "Goal (BTTS)", "Corner Over 10.5"
   selection: string;           // e.g. "Over 2.5 Gol", "Vittoria Casa (1)", "Entrambe a Segno (Sì)"
   probability: number;         // e.g. 58.4 (%)
   fairOdds: number;            // e.g. 1.71 (100 / probability)
@@ -247,7 +256,7 @@ export interface BettingAdviceTip {
   confidence: 'Alta' | 'Media' | 'Speculativa';
   actionPhrase: string;        // e.g. "Punta l'esito Over 2.5 se il bookmaker offre almeno @1.80"
   rationale: string;           // Tactical and statistical motivation
-  category: '1X2 & Doppia Chance' | 'Under / Over' | 'Goal / No Goal' | 'Corner' | 'Risultato Esatto';
+  category: '1X2 & Doppia Chance' | 'Under / Over' | 'Goal / No Goal' | 'Corner' | 'Risultato Esatto' | 'Combo & Multigol';
 }
 
 export interface MatchSimulationResult {
@@ -266,12 +275,57 @@ export interface MatchSimulationResult {
   under25Prob: number;
   over35Prob: number;
   under35Prob: number;
+  over45Prob: number;
+  under45Prob: number;
   doubleChance1XProb: number;
   doubleChanceX2Prob: number;
   doubleChance12Prob: number;
+  multigoal13Prob: number;
+  multigoal24Prob: number;
+  multigoal25Prob: number;
+  combo1AndOver25Prob: number;
+  combo1AndNoGoalProb: number;
+  comboXAndUnder25Prob: number;
+  comboOver25AndGoalProb: number;
+  
+  // Range ampliato Calci d'Angolo
+  expectedHomeCorners: number;
+  expectedAwayCorners: number;
   expectedTotalCorners: number;
+  cornerOver65Prob: number;
+  cornerUnder65Prob: number;
+  cornerOver75Prob: number;
+  cornerUnder75Prob: number;
   cornerOver85Prob: number;
+  cornerUnder85Prob: number;
   cornerOver95Prob: number;
+  cornerUnder95Prob: number;
+  cornerOver105Prob: number;
+  cornerUnder105Prob: number;
+  cornerOver115Prob: number;
+  cornerUnder115Prob: number;
+  cornerOver125Prob: number;
+  cornerUnder125Prob: number;
+  cornerOver135Prob: number;
+  cornerUnder135Prob: number;
+  cornerOver145Prob: number;
+  cornerUnder145Prob: number;
+  cornerHomeOver35Prob: number;
+  cornerHomeOver45Prob: number;
+  cornerHomeOver55Prob: number;
+  cornerAwayOver25Prob: number;
+  cornerAwayOver35Prob: number;
+  cornerAwayOver45Prob: number;
+  cornerHomeMostProb: number;
+  cornerAwayMostProb: number;
+  cornerEqualProb: number;
+  cornerRangeProbs: {
+    range0to8: number;
+    range9to11: number;
+    range12to14: number;
+    range15plus: number;
+    range12plus: number;
+  };
   mostLikelyScores: Array<{
     score: string;
     home: number;
@@ -285,10 +339,22 @@ export interface MatchCustomOdds {
   homeOdds?: number;
   drawOdds?: number;
   awayOdds?: number;
+  over15Odds?: number;
+  under15Odds?: number;
   over25Odds?: number;
   under25Odds?: number;
+  over35Odds?: number;
+  under35Odds?: number;
   bttsYesOdds?: number;
   bttsNoOdds?: number;
+  doubleChance1XOdds?: number;
+  doubleChanceX2Odds?: number;
+  cornerOver85Odds?: number;
+  cornerOver95Odds?: number;
+  cornerOver105Odds?: number;
+  cornerOver115Odds?: number;
+  cornerHomeOdds?: number;
+  cornerAwayOdds?: number;
   sourceName?: string;
 }
 
@@ -370,4 +436,119 @@ export interface FilterState {
   dateTo: string;
   searchQuery: string;
   competition: string;
+}
+
+export interface StatisticalCorrelationPair {
+  id: string;
+  featureA: string;
+  featureB: string;
+  targetMarket: string;
+  pearsonR: number;           // Correlazione lineare di Pearson (-1 a +1)
+  spearmanRho: number;        // Correlazione di rango di Spearman (-1 a +1)
+  sampleSize: number;
+  strength: 'Forte' | 'Moderata' | 'Debole';
+  interpretation: string;     // Spiegazione teorica e tattica
+  bettingImplication: string; // Come sfruttarla sul mercato quote
+}
+
+export interface MarketConditionalProbability {
+  id: string;
+  condition: string;          // es. "Se vince la squadra di casa (Esito 1)"
+  targetEvent: string;        // es. "Over 2.5 Gol"
+  formulaSymbol: string;      // es. "P(Over 2.5 | 1)"
+  empiricalPct: number;       // Calcolato sullo storico gare
+  modelPct: number;           // Calcolato dalla distribuzione teorica
+  sampleMatches: number;      // Quante gare soddisfano la condizione
+  deltaPct: number;           // empiricalPct - modelPct
+  marketSignal: string;       // Indicazione operativa per il betting
+}
+
+export interface NoVigComparisonResult {
+  homeOdds: number;
+  drawOdds: number;
+  awayOdds: number;
+  rawOverroundPct: number;
+  
+  // Metodo Proporzionale (Standard)
+  proportional: {
+    homeProb: number;
+    drawProb: number;
+    awayProb: number;
+    fairHome: number;
+    fairDraw: number;
+    fairAway: number;
+  };
+
+  // Metodo Shin (Modello informati z)
+  shin: {
+    zParameter: number;      // Frazione stimata scommettitori con informazione privata
+    homeProb: number;
+    drawProb: number;
+    awayProb: number;
+    fairHome: number;
+    fairDraw: number;
+    fairAway: number;
+  };
+
+  // Metodo Power (Esponenziale)
+  power: {
+    kExponent: number;
+    homeProb: number;
+    drawProb: number;
+    awayProb: number;
+    fairHome: number;
+    fairDraw: number;
+    fairAway: number;
+  };
+}
+
+export interface PredictiveValidationMetrics {
+  totalEvaluatedMatches: number;
+  
+  // Brier Scores (inferiore è migliore, 0 = perfetto)
+  brierScore1X2: number;
+  brierScoreOver25: number;
+  brierScoreBtts: number;
+
+  // Ranked Probability Score (per mercati ordinali H-D-A)
+  rankedProbabilityScore: number;
+
+  // Log Loss (Cross-Entropy Loss)
+  logLoss1X2: number;
+
+  // Overdispersion Check (Varianza vs Media gol per test Binomiale Negativa)
+  meanGoals: number;
+  varianceGoals: number;
+  overdispersionRatio: number; // > 1.15 indica overdispersion (adatto a NegBinomial)
+  isOverdispersed: boolean;
+
+  // Bins di calibrazione (frequenza reale vs probabilità implicita/modello)
+  calibrationBuckets: Array<{
+    bucketLabel: string;
+    expectedProbPct: number;
+    observedFreqPct: number;
+    sampleSize: number;
+    calibrationGapPct: number;
+  }>;
+}
+
+export interface MarketBiasReport {
+  favoriteLongshotBias: {
+    shortOddsRoiPct: number;   // Quote < 1.60
+    longOddsRoiPct: number;    // Quote > 4.50
+    gapPct: number;
+    verdict: string;
+  };
+  drawBias: {
+    drawActualPct: number;
+    drawImpliedPct: number;
+    drawRoiPct: number;
+    verdict: string;
+  };
+  homeAdvantageBias: {
+    homeWinActualPct: number;
+    homeWinImpliedPct: number;
+    homeRoiPct: number;
+    verdict: string;
+  };
 }

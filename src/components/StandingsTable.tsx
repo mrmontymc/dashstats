@@ -9,6 +9,7 @@ interface StandingsTableProps {
   isFiltered?: boolean;
   venue?: 'all' | 'home' | 'away';
   onVenueChange?: (venue: 'all' | 'home' | 'away') => void;
+  compact?: boolean;
 }
 
 type SortField = 'points' | 'played' | 'won' | 'drawn' | 'lost' | 'goalsFor' | 'goalsAgainst' | 'goalDiff' | 'totalXg' | 'xPts' | 'shotConversionRate' | 'eloRating' | 'homeDominanceRatio';
@@ -20,9 +21,11 @@ export const StandingsTable: React.FC<StandingsTableProps> = ({
   isFiltered,
   venue = 'all',
   onVenueChange,
+  compact = false,
 }) => {
   const [sortField, setSortField] = useState<SortField>('points');
   const [sortAsc, setSortAsc] = useState<boolean>(false);
+  const [showAllInCompact, setShowAllInCompact] = useState<boolean>(false);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -75,13 +78,17 @@ export const StandingsTable: React.FC<StandingsTableProps> = ({
     return 0;
   });
 
+  const displayData = compact && !showAllInCompact ? sortedData.slice(0, 10) : sortedData;
+
   const getTableTitle = () => {
+    if (compact) return 'Classifica Compatta e Rendimento Squadre';
     if (venue === 'home') return 'Classifica Casa (Rendimento Interno)';
     if (venue === 'away') return 'Classifica Trasferta (Rendimento Esterno)';
     return 'Classifica Generale e Rendimento';
   };
 
   const getTableDescription = () => {
+    if (compact) return 'Visione rapida del ranking e punti conquistati. Clicca su una squadra per visualizzare la scheda tecnica.';
     if (venue === 'home') return 'Statistiche e punti conquistati esclusivamente negli incontri disputati sul proprio campo.';
     if (venue === 'away') return 'Statistiche e punti conquistati esclusivamente nelle gare giocate fuori casa.';
     return 'Clicca su una squadra per visualizzare la scheda analitica dettagliata.';
@@ -252,14 +259,14 @@ export const StandingsTable: React.FC<StandingsTableProps> = ({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/60 font-mono">
-            {sortedData.length === 0 ? (
+            {displayData.length === 0 ? (
               <tr>
                 <td colSpan={15} className="py-8 text-center text-slate-500 font-sans text-xs">
                   Nessuna squadra corrispondente ai filtri attivi. Prova a modificare o azzerare i criteri di ricerca.
                 </td>
               </tr>
             ) : (
-              sortedData.map((row, index) => {
+              displayData.map((row, index) => {
                 const isSelected = selectedTeam === row.team;
               const pos = index + 1;
 
@@ -363,6 +370,21 @@ export const StandingsTable: React.FC<StandingsTableProps> = ({
           </tbody>
         </table>
       </div>
+
+      {compact && sortedData.length > 10 && (
+        <div className="px-4 py-2.5 bg-slate-950/60 border-t border-slate-800 flex items-center justify-between text-xs font-mono">
+          <span className="text-slate-400">
+            Visualizzate <strong className="text-slate-200">{displayData.length}</strong> su <strong className="text-slate-200">{sortedData.length}</strong> squadre
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowAllInCompact(!showAllInCompact)}
+            className="text-xs text-emerald-400 hover:text-emerald-300 font-sans font-medium transition-colors"
+          >
+            {showAllInCompact ? 'Comprimi a Top 10 ↑' : `Mostra tutte le ${sortedData.length} squadre ↓`}
+          </button>
+        </div>
+      )}
     </div>
   );
 };

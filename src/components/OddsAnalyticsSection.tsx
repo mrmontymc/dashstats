@@ -14,7 +14,14 @@ import {
   Database,
   Sparkles,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Network,
+  Scale,
+  Activity,
+  Layers,
+  HelpCircle,
+  Binary,
+  Compass,
 } from 'lucide-react';
 import { Match, AnalysisConfig } from '../types/football';
 import {
@@ -23,6 +30,11 @@ import {
   findProfitableMarketPatterns,
   computeOddsSourceSummary,
   findValueBets,
+  computeStatisticalCorrelations,
+  computeMarketConditionalProbabilities,
+  calculateNoVigMethods,
+  computePredictiveValidationMetrics,
+  computeMarketBiases,
 } from '../utils/oddsAnalyticsEngine';
 import { computePredictiveProfiles, computeTeamStats } from '../utils/predictiveEngine';
 
@@ -43,9 +55,16 @@ export const OddsAnalyticsSection: React.FC<OddsAnalyticsSectionProps> = ({
   onOpenConfig,
   isFiltered,
 }) => {
-  const [activeTab, setActiveTab] = useState<'profitable' | 'valuebets' | 'brackets' | 'corners' | 'provenance' | 'calculator'>('profitable');
+  const [activeTab, setActiveTab] = useState<
+    'profitable' | 'valuebets' | 'correlations' | 'validation' | 'brackets' | 'corners' | 'provenance' | 'calculator'
+  >('profitable');
   const [selectedMarketForBrackets, setSelectedMarketForBrackets] = useState<'1' | 'X' | '2' | 'Over25' | 'Under25' | 'BTTS_Yes' | 'CornerOver95'>('1');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
+
+  // Input per calcolatore No-Vig interattivo
+  const [noVigHomeOdd, setNoVigHomeOdd] = useState<number>(2.10);
+  const [noVigDrawOdd, setNoVigDrawOdd] = useState<number>(3.35);
+  const [noVigAwayOdd, setNoVigAwayOdd] = useState<number>(3.70);
 
   // Provenienza e overround delle quote
   const oddsSummary = useMemo(() => {
@@ -81,6 +100,31 @@ export const OddsAnalyticsSection: React.FC<OddsAnalyticsSectionProps> = ({
   const bracketsAnalysis = useMemo(() => {
     return computeOddsBrackets(matches, selectedMarketForBrackets, config?.flatStake ?? 100);
   }, [matches, selectedMarketForBrackets, config]);
+
+  // Abbinamenti statistici e correlazioni empiriche da documento tecnico
+  const statisticalCorrelations = useMemo(() => {
+    return computeStatisticalCorrelations(matches);
+  }, [matches]);
+
+  // Probabilità condizionate tra mercati
+  const conditionalProbabilities = useMemo(() => {
+    return computeMarketConditionalProbabilities(matches);
+  }, [matches]);
+
+  // Validazione modelli, Brier score, RPS, overdispersion
+  const validationMetrics = useMemo(() => {
+    return computePredictiveValidationMetrics(matches);
+  }, [matches]);
+
+  // Bias di mercato
+  const marketBiases = useMemo(() => {
+    return computeMarketBiases(matches);
+  }, [matches]);
+
+  // Risultati No-Vig calcolati
+  const noVigResults = useMemo(() => {
+    return calculateNoVigMethods(noVigHomeOdd || 2.0, noVigDrawOdd || 3.0, noVigAwayOdd || 3.0);
+  }, [noVigHomeOdd, noVigDrawOdd, noVigAwayOdd]);
 
   // Calcolo filtri per la tabella mercati profittevoli
   const filteredPatterns = profitablePatterns.filter((p) => {
@@ -200,7 +244,7 @@ export const OddsAnalyticsSection: React.FC<OddsAnalyticsSectionProps> = ({
             }`}
           >
             <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Serie di Mercati Profittevoli</span>
+            <span>Serie Mercati Profittevoli</span>
           </button>
           <button
             onClick={() => setActiveTab('valuebets')}
@@ -214,6 +258,28 @@ export const OddsAnalyticsSection: React.FC<OddsAnalyticsSectionProps> = ({
             <span>Value Bets (+EV) Scanner ({valueBets.length})</span>
           </button>
           <button
+            onClick={() => setActiveTab('correlations')}
+            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+              activeTab === 'correlations'
+                ? 'bg-slate-800 text-cyan-400 shadow-sm'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Network className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Abbinamenti & Correlazioni Statistiche ({statisticalCorrelations.length})</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('validation')}
+            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+              activeTab === 'validation'
+                ? 'bg-slate-800 text-emerald-400 shadow-sm'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Scale className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Efficienza Mercato & No-Vig</span>
+          </button>
+          <button
             onClick={() => setActiveTab('brackets')}
             className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap ${
               activeTab === 'brackets'
@@ -222,29 +288,29 @@ export const OddsAnalyticsSection: React.FC<OddsAnalyticsSectionProps> = ({
             }`}
           >
             <BarChart2 className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Analisi Range di Quota</span>
+            <span>Range di Quota</span>
           </button>
           <button
             onClick={() => setActiveTab('corners')}
             className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap ${
               activeTab === 'corners'
-                ? 'bg-slate-800 text-emerald-400 shadow-sm'
+                ? 'bg-slate-800 text-amber-400 shadow-sm'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <Flag className="w-3.5 h-3.5 text-amber-400" />
-            <span>Mercato Calci d'Angolo</span>
+            <span>Calci d'Angolo</span>
           </button>
           <button
             onClick={() => setActiveTab('provenance')}
             className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap ${
               activeTab === 'provenance'
-                ? 'bg-slate-800 text-emerald-400 shadow-sm'
+                ? 'bg-slate-800 text-sky-400 shadow-sm'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <Database className="w-3.5 h-3.5 text-sky-400" />
-            <span>Provenienza Quote & Lavagna</span>
+            <span>Lavagna & Aggio</span>
           </button>
           <button
             onClick={() => setActiveTab('calculator')}
@@ -374,6 +440,650 @@ export const OddsAnalyticsSection: React.FC<OddsAnalyticsSectionProps> = ({
                   )}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tab: Matrice Abbinamenti Statistiche & Correlazioni Quote */}
+      {activeTab === 'correlations' && (
+        <div className="space-y-6">
+          {/* Header Banner for Correlations */}
+          <div className="bg-slate-900/60 border border-slate-800 rounded-lg p-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="p-1 rounded bg-cyan-500/10 border border-cyan-500/20 text-cyan-400">
+                    <Network className="w-4 h-4" />
+                  </span>
+                  <h3 className="text-sm font-bold text-white tracking-tight">
+                    Matrice di Abbinamento tra Statistiche di Campo e Mercati Quote
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-400 max-w-3xl leading-relaxed">
+                  Confronto empirico e accoppiamento logico tra metriche oggettive di prestazione (xG, tiri nello specchio, corner, falli, possesso) 
+                  e comportamento delle quote. I coefficienti di correlazione lineare (Pearson r) e di rango (Spearman ρ) misurano la forza statistica del legame nel dataset attivo.
+                </p>
+              </div>
+              <div className="text-right font-mono text-xs text-slate-400 bg-slate-950 p-2 rounded border border-slate-800 shrink-0">
+                <span className="text-slate-500 text-[10px] block">Campione Analizzato</span>
+                <span className="text-cyan-400 font-bold">{matches.length} partite</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Correlations Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+            {statisticalCorrelations.map((pair) => {
+              const isStrong = Math.abs(pair.pearsonR) >= 0.55;
+              const isPositive = pair.pearsonR >= 0;
+              return (
+                <div
+                  key={pair.id}
+                  className="p-4 bg-slate-950 rounded-lg border border-slate-800 hover:border-slate-700 transition-colors flex flex-col justify-between"
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono border bg-slate-900 border-slate-700 text-slate-300">
+                        {pair.targetMarket}
+                      </span>
+                      <span
+                        className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold border ${
+                          pair.strength === 'Forte'
+                            ? 'bg-emerald-950/60 text-emerald-400 border-emerald-800/60'
+                            : 'bg-amber-950/60 text-amber-400 border-amber-800/60'
+                        }`}
+                      >
+                        {pair.strength} Correlazione
+                      </span>
+                    </div>
+
+                    <h4 className="text-xs font-bold text-white mb-1">
+                      {pair.featureA} ↔ {pair.featureB}
+                    </h4>
+
+                    {/* Numerical Coefficients */}
+                    <div className="grid grid-cols-2 gap-2 my-2.5 p-2 bg-slate-900/60 rounded border border-slate-800/80 font-mono text-xs">
+                      <div>
+                        <span className="text-[10px] text-slate-500 block font-sans">Pearson (r)</span>
+                        <span className={`text-sm font-bold ${isStrong ? 'text-emerald-400' : 'text-slate-200'}`}>
+                          {isPositive ? `+${pair.pearsonR}` : pair.pearsonR}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-slate-500 block font-sans">Spearman (ρ)</span>
+                        <span className="text-sm font-bold text-cyan-400">
+                          {pair.spearmanRho > 0 ? `+${pair.spearmanRho}` : pair.spearmanRho}
+                        </span>
+                      </div>
+                    </div>
+
+                    <p className="text-[11px] text-slate-400 leading-relaxed mb-3">
+                      {pair.interpretation}
+                    </p>
+                  </div>
+
+                  <div className="pt-2.5 border-t border-slate-800/80 text-[11px]">
+                    <span className="text-emerald-400 font-semibold block mb-0.5 flex items-center gap-1 font-mono text-[10px]">
+                      <ArrowUpRight className="w-3 h-3 text-emerald-400" />
+                      STRATEGIA SULLE QUOTE:
+                    </span>
+                    <p className="text-slate-300 text-[11px] leading-relaxed">
+                      {pair.bettingImplication}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Conditional Probabilities between Markets Section */}
+          <div className="bg-slate-900/60 border border-slate-800 rounded-lg p-5">
+            <div className="flex items-center justify-between mb-4 pb-2 border-b border-slate-800">
+              <div>
+                <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                  <Binary className="w-4 h-4 text-emerald-400" />
+                  <span>Probabilità Condizionate tra Mercati Incrociati</span>
+                </h4>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Frequenza empirica reale vs modello teorico di correlazione: scopri come il verificarsi di un esito (es. Segno 1) influenza la probabilità di Over o BTTS.
+                </p>
+              </div>
+              <span className="text-xs font-mono text-slate-500">{conditionalProbabilities.length} combinazioni chiave</span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 font-mono">
+              {conditionalProbabilities.map((cond) => {
+                const isOverperforming = cond.deltaPct > 0;
+                return (
+                  <div key={cond.id} className="p-3.5 bg-slate-950 rounded-lg border border-slate-800 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between text-xs mb-1.5">
+                        <span className="text-emerald-400 font-bold text-sm">{cond.formulaSymbol}</span>
+                        <span className="text-[10px] text-slate-500 font-sans">{cond.sampleMatches} gare campione</span>
+                      </div>
+                      <div className="text-[11px] font-sans text-slate-300 font-medium mb-1">
+                        {cond.condition}
+                      </div>
+                      <div className="text-[10px] font-sans text-slate-400 mb-2.5">
+                        Evento target: <strong className="text-slate-200">{cond.targetEvent}</strong>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-1.5 p-2 bg-slate-900 rounded border border-slate-800 text-center text-xs mb-2.5">
+                        <div>
+                          <span className="text-[9px] text-slate-500 block font-sans">Empirica</span>
+                          <span className="font-bold text-white tabular-nums">{cond.empiricalPct}%</span>
+                        </div>
+                        <div>
+                          <span className="text-[9px] text-slate-500 block font-sans">Modello</span>
+                          <span className="font-bold text-slate-400 tabular-nums">{cond.modelPct}%</span>
+                        </div>
+                        <div>
+                          <span className="text-[9px] text-slate-500 block font-sans">Delta</span>
+                          <span className={`font-bold tabular-nums ${isOverperforming ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {isOverperforming ? `+${cond.deltaPct}%` : `${cond.deltaPct}%`}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-800 text-[10px] font-sans text-slate-400">
+                      <span className="text-slate-300 font-medium block">Segnale operativo:</span>
+                      <p className="mt-0.5 text-slate-400 leading-snug">{cond.marketSignal}</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Reference Table of Fundamental Soccer Statistical Pairings */}
+          <div className="bg-slate-900/60 border border-slate-800 rounded-lg p-5">
+            <h4 className="text-sm font-bold text-white mb-2 flex items-center gap-2">
+              <Layers className="w-4 h-4 text-cyan-400" />
+              <span>Guida Operativa Completa agli Abbinamenti Statistiche & Quote</span>
+            </h4>
+            <p className="text-xs text-slate-400 mb-4 leading-relaxed">
+              Tavola sinottica dei 12 abbinamenti metodologici per la costruzione di quote euristiche e individuazione di Value Bet:
+            </p>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs whitespace-nowrap font-mono">
+                <thead className="bg-slate-950/80 text-slate-400 border-b border-slate-800 text-[11px] uppercase">
+                  <tr>
+                    <th className="py-2.5 px-3">Statistica A</th>
+                    <th className="py-2.5 px-3">Statistica B</th>
+                    <th className="py-2.5 px-3">Mercato Connesso</th>
+                    <th className="py-2.5 px-3">Logica Tattica & Analitica</th>
+                    <th className="py-2.5 px-3 text-right">Applicazione Quota</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  <tr className="hover:bg-slate-800/30">
+                    <td className="py-2 px-3 text-emerald-400 font-semibold font-sans">xG (Expected Goals)</td>
+                    <td className="py-2 px-3 text-slate-300 font-sans">xGA (Concessi)</td>
+                    <td className="py-2 px-3 text-slate-300">1X2, Over/Under, BTTS</td>
+                    <td className="py-2 px-3 text-slate-400 font-sans">Misura la forza intrinseca offensiva e difensiva al netto del caso</td>
+                    <td className="py-2 px-3 text-right text-emerald-400 font-semibold">Value Bet su favorito falso</td>
+                  </tr>
+                  <tr className="hover:bg-slate-800/30">
+                    <td className="py-2 px-3 text-emerald-400 font-semibold font-sans">Tiri nello Specchio</td>
+                    <td className="py-2 px-3 text-slate-300 font-sans">Gol Effettivi</td>
+                    <td className="py-2 px-3 text-slate-300">Over/Under, BTTS</td>
+                    <td className="py-2 px-3 text-slate-400 font-sans">Indice di efficienza realizzativa e cinismo in area di rigore</td>
+                    <td className="py-2 px-3 text-right text-cyan-400 font-semibold">Regressione verso la media</td>
+                  </tr>
+                  <tr className="hover:bg-slate-800/30">
+                    <td className="py-2 px-3 text-emerald-400 font-semibold font-sans">Possesso Palla (%)</td>
+                    <td className="py-2 px-3 text-slate-300 font-sans">PPDA / Pressione</td>
+                    <td className="py-2 px-3 text-slate-300">Corner, Cartellini, Ritmo</td>
+                    <td className="py-2 px-3 text-slate-400 font-sans">Squadra dominante vs pressing alto, controllo delle transizioni</td>
+                    <td className="py-2 px-3 text-right text-amber-400 font-semibold">Ritmo di gara e total goal</td>
+                  </tr>
+                  <tr className="hover:bg-slate-800/30">
+                    <td className="py-2 px-3 text-emerald-400 font-semibold font-sans">Cross dal Fondo / Ali</td>
+                    <td className="py-2 px-3 text-slate-300 font-sans">Calci d'Angolo</td>
+                    <td className="py-2 px-3 text-slate-300">Corner Over 8.5/9.5</td>
+                    <td className="py-2 px-3 text-slate-400 font-sans">Stile di gioco orientato alle corsie esterne e deviazioni sul fondo</td>
+                    <td className="py-2 px-3 text-right text-emerald-400 font-semibold">Over Corner sistematico</td>
+                  </tr>
+                  <tr className="hover:bg-slate-800/30">
+                    <td className="py-2 px-3 text-emerald-400 font-semibold font-sans">Falli Commessi</td>
+                    <td className="py-2 px-3 text-slate-300 font-sans">Media Arbitro Cartellini</td>
+                    <td className="py-2 px-3 text-slate-300">Over Cartellini, Rossi</td>
+                    <td className="py-2 px-3 text-slate-400 font-sans">Propensione disciplinare incrociata con la severità della terna</td>
+                    <td className="py-2 px-3 text-right text-rose-400 font-semibold">Linee sanzioni disciplinari</td>
+                  </tr>
+                  <tr className="hover:bg-slate-800/30">
+                    <td className="py-2 px-3 text-emerald-400 font-semibold font-sans">Forma Recente (EWMA)</td>
+                    <td className="py-2 px-3 text-slate-300 font-sans">Difficoltà Calendario</td>
+                    <td className="py-2 px-3 text-slate-300">1X2, Doppia Chance</td>
+                    <td className="py-2 px-3 text-slate-400 font-sans">Punti recenti ponderati per il livello reale degli avversari affrontati</td>
+                    <td className="py-2 px-3 text-right text-cyan-400 font-semibold">Stima Elo dinamica</td>
+                  </tr>
+                  <tr className="hover:bg-slate-800/30">
+                    <td className="py-2 px-3 text-emerald-400 font-semibold font-sans">Quote Bookmaker</td>
+                    <td className="py-2 px-3 text-slate-300 font-sans">Stima Dixon-Coles</td>
+                    <td className="py-2 px-3 text-slate-300">Tutti i Mercati</td>
+                    <td className="py-2 px-3 text-slate-400 font-sans">Divergenza tra prezzo quotato e probabilità calcolata con no-vig</td>
+                    <td className="py-2 px-3 text-right text-purple-400 font-semibold">+EV & Staking di Kelly</td>
+                  </tr>
+                  <tr className="hover:bg-slate-800/30">
+                    <td className="py-2 px-3 text-emerald-400 font-semibold font-sans">Movimento Opening/Closing</td>
+                    <td className="py-2 px-3 text-slate-300 font-sans">Volume di Mercato</td>
+                    <td className="py-2 px-3 text-slate-300">Closing Line Value (CLV)</td>
+                    <td className="py-2 px-3 text-slate-400 font-sans">Rilevamento flussi di denaro informato (Steam Move & Reverse Line)</td>
+                    <td className="py-2 px-3 text-right text-emerald-400 font-semibold">Beat The Closing Line</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tab: Efficienza Mercato, No-Vig & Validazione Predittiva */}
+      {activeTab === 'validation' && (
+        <div className="space-y-6">
+          {/* Header Banner */}
+          <div className="bg-slate-900/60 border border-slate-800 rounded-lg p-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="p-1 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                    <Scale className="w-4 h-4" />
+                  </span>
+                  <h3 className="text-sm font-bold text-white tracking-tight">
+                    Efficienza del Mercato, Validazione Predittiva & Modelli No-Vig
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-400 max-w-3xl leading-relaxed">
+                  Confronto avanzato dei metodi di rimozione del margine (Proporzionale vs Shin vs Power), 
+                  metriche di accuratezza probabilistica (Brier Score, RPS, Log Loss), test di overdispersion sui gol totali 
+                  e verifica dei bias di mercato (Favorite-Longshot, Draw bias, Home bias).
+                </p>
+              </div>
+              <div className="text-right font-mono text-xs text-slate-400 bg-slate-950 p-2 rounded border border-slate-800 shrink-0">
+                <span className="text-slate-500 text-[10px] block">Test di Overdispersion</span>
+                <span className={validationMetrics.isOverdispersed ? 'text-amber-400 font-bold' : 'text-emerald-400 font-bold'}>
+                  Ratio {validationMetrics.overdispersionRatio} ({validationMetrics.isOverdispersed ? 'NegBinomial' : 'Poisson'})
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Section 1: Interactive No-Vig Calculator comparing Proportional, Shin & Power */}
+          <div className="bg-slate-900/60 border border-slate-800 rounded-lg p-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 mb-4 border-b border-slate-800">
+              <div>
+                <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                  <Calculator className="w-4 h-4 text-emerald-400" />
+                  <span>Calcolatore No-Vig Comparativo: Proporzionale vs Modello Shin vs Power</span>
+                </h4>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Digita le quote 1-X-2 per confrontare l'aggio reale e le quote eque (Fair Odds) stimate con ciascun modello matematico.
+                </p>
+              </div>
+              <div className="font-mono text-xs text-slate-300 bg-slate-950 px-3 py-1 rounded border border-slate-800 shrink-0">
+                Aggio Banco Rilevato: <strong className="text-emerald-400 font-bold">{noVigResults.rawOverroundPct}%</strong>
+              </div>
+            </div>
+
+            {/* Inputs Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
+              <div className="p-3 bg-slate-950 rounded-lg border border-slate-800 focus-within:border-emerald-500">
+                <label className="block text-[11px] font-mono text-slate-400 mb-1">QUOTA SEGNO 1 (CASA)</label>
+                <div className="relative flex items-center">
+                  <span className="absolute left-2.5 text-slate-500 font-mono text-xs">@</span>
+                  <input
+                    type="number"
+                    step="0.05"
+                    min="1.01"
+                    max="50"
+                    value={noVigHomeOdd}
+                    onChange={(e) => setNoVigHomeOdd(parseFloat(e.target.value) || 1.01)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded pl-7 pr-2 py-1.5 text-sm font-mono font-bold text-white focus:outline-none focus:border-emerald-500 tabular-nums"
+                  />
+                </div>
+              </div>
+
+              <div className="p-3 bg-slate-950 rounded-lg border border-slate-800 focus-within:border-emerald-500">
+                <label className="block text-[11px] font-mono text-slate-400 mb-1">QUOTA SEGNO X (PAREGGIO)</label>
+                <div className="relative flex items-center">
+                  <span className="absolute left-2.5 text-slate-500 font-mono text-xs">@</span>
+                  <input
+                    type="number"
+                    step="0.05"
+                    min="1.01"
+                    max="50"
+                    value={noVigDrawOdd}
+                    onChange={(e) => setNoVigDrawOdd(parseFloat(e.target.value) || 1.01)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded pl-7 pr-2 py-1.5 text-sm font-mono font-bold text-white focus:outline-none focus:border-emerald-500 tabular-nums"
+                  />
+                </div>
+              </div>
+
+              <div className="p-3 bg-slate-950 rounded-lg border border-slate-800 focus-within:border-emerald-500">
+                <label className="block text-[11px] font-mono text-slate-400 mb-1">QUOTA SEGNO 2 (TRASFERTA)</label>
+                <div className="relative flex items-center">
+                  <span className="absolute left-2.5 text-slate-500 font-mono text-xs">@</span>
+                  <input
+                    type="number"
+                    step="0.05"
+                    min="1.01"
+                    max="50"
+                    value={noVigAwayOdd}
+                    onChange={(e) => setNoVigAwayOdd(parseFloat(e.target.value) || 1.01)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded pl-7 pr-2 py-1.5 text-sm font-mono font-bold text-white focus:outline-none focus:border-emerald-500 tabular-nums"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Methods Comparison Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 font-mono text-xs">
+              {/* Method 1: Proportional */}
+              <div className="p-4 bg-slate-950 rounded-lg border border-slate-800 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between pb-2 mb-3 border-b border-slate-800/80">
+                    <span className="font-bold text-white font-sans">1. Metodo Proporzionale</span>
+                    <span className="text-[10px] text-slate-500">Standard</span>
+                  </div>
+                  <p className="text-[11px] font-sans text-slate-400 mb-3 leading-relaxed">
+                    Distribuisce il margine in modo uniformemente proporzionale alla probabilità implicita di ciascun esito.
+                  </p>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between p-2 bg-slate-900 rounded">
+                      <span className="text-slate-400">Esito 1:</span>
+                      <span>
+                        <strong className="text-emerald-400">{noVigResults.proportional.homeProb}%</strong>{' '}
+                        <span className="text-slate-500">(Fair @{noVigResults.proportional.fairHome.toFixed(2)})</span>
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between p-2 bg-slate-900 rounded">
+                      <span className="text-slate-400">Esito X:</span>
+                      <span>
+                        <strong className="text-slate-200">{noVigResults.proportional.drawProb}%</strong>{' '}
+                        <span className="text-slate-500">(Fair @{noVigResults.proportional.fairDraw.toFixed(2)})</span>
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between p-2 bg-slate-900 rounded">
+                      <span className="text-slate-400">Esito 2:</span>
+                      <span>
+                        <strong className="text-cyan-400">{noVigResults.proportional.awayProb}%</strong>{' '}
+                        <span className="text-slate-500">(Fair @{noVigResults.proportional.fairAway.toFixed(2)})</span>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Method 2: Shin Method */}
+              <div className="p-4 bg-slate-950 rounded-lg border border-emerald-900/60 bg-emerald-950/10 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between pb-2 mb-3 border-b border-emerald-900/40">
+                    <span className="font-bold text-emerald-400 font-sans">2. Modello di Shin (1993)</span>
+                    <span className="text-[10px] text-emerald-400 font-mono">z={noVigResults.shin.zParameter}%</span>
+                  </div>
+                  <p className="text-[11px] font-sans text-slate-300 mb-3 leading-relaxed">
+                    Stima la presenza di scommettitori con informazioni privilegiate (z). Corregge il celebre <strong>Longshot Bias</strong> scaricando l'aggio dai favoriti.
+                  </p>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between p-2 bg-slate-900 rounded">
+                      <span className="text-slate-400">Esito 1:</span>
+                      <span>
+                        <strong className="text-emerald-400">{noVigResults.shin.homeProb}%</strong>{' '}
+                        <span className="text-slate-500">(Fair @{noVigResults.shin.fairHome.toFixed(2)})</span>
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between p-2 bg-slate-900 rounded">
+                      <span className="text-slate-400">Esito X:</span>
+                      <span>
+                        <strong className="text-slate-200">{noVigResults.shin.drawProb}%</strong>{' '}
+                        <span className="text-slate-500">(Fair @{noVigResults.shin.fairDraw.toFixed(2)})</span>
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between p-2 bg-slate-900 rounded">
+                      <span className="text-slate-400">Esito 2:</span>
+                      <span>
+                        <strong className="text-cyan-400">{noVigResults.shin.awayProb}%</strong>{' '}
+                        <span className="text-slate-500">(Fair @{noVigResults.shin.fairAway.toFixed(2)})</span>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Method 3: Power Method */}
+              <div className="p-4 bg-slate-950 rounded-lg border border-slate-800 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between pb-2 mb-3 border-b border-slate-800/80">
+                    <span className="font-bold text-cyan-400 font-sans">3. Metodo Power</span>
+                    <span className="text-[10px] text-cyan-400 font-mono">k={noVigResults.power.kExponent}</span>
+                  </div>
+                  <p className="text-[11px] font-sans text-slate-400 mb-3 leading-relaxed">
+                    Eleva le probabilità inverse alla potenza esponenziale k fino a pareggiare la somma al 100%. Ideale per mercati calcistici liquidi.
+                  </p>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between p-2 bg-slate-900 rounded">
+                      <span className="text-slate-400">Esito 1:</span>
+                      <span>
+                        <strong className="text-emerald-400">{noVigResults.power.homeProb}%</strong>{' '}
+                        <span className="text-slate-500">(Fair @{noVigResults.power.fairHome.toFixed(2)})</span>
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between p-2 bg-slate-900 rounded">
+                      <span className="text-slate-400">Esito X:</span>
+                      <span>
+                        <strong className="text-slate-200">{noVigResults.power.drawProb}%</strong>{' '}
+                        <span className="text-slate-500">(Fair @{noVigResults.power.fairDraw.toFixed(2)})</span>
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between p-2 bg-slate-900 rounded">
+                      <span className="text-slate-400">Esito 2:</span>
+                      <span>
+                        <strong className="text-cyan-400">{noVigResults.power.awayProb}%</strong>{' '}
+                        <span className="text-slate-500">(Fair @{noVigResults.power.fairAway.toFixed(2)})</span>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Section 2: Predictive Validation Metrics (Brier, RPS, Log Loss, Overdispersion) */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Validation Metrics Card */}
+            <div className="p-5 bg-slate-900/60 border border-slate-800 rounded-lg">
+              <h4 className="text-sm font-bold text-white mb-2 flex items-center gap-2">
+                <Activity className="w-4 h-4 text-emerald-400" />
+                <span>Metriche di Accuratezza Probabilistica</span>
+              </h4>
+              <p className="text-xs text-slate-400 mb-4 leading-relaxed">
+                Punteggi statistici di calibrazione e dispersione calcolati su tutte le gare con quote registrate:
+              </p>
+
+              <div className="grid grid-cols-2 gap-3 font-mono text-xs">
+                <div className="p-3 bg-slate-950 rounded border border-slate-800">
+                  <span className="text-[10px] text-slate-500 block font-sans">Brier Score 1X2</span>
+                  <span className="text-lg font-bold text-emerald-400 tabular-nums">
+                    {validationMetrics.brierScore1X2}
+                  </span>
+                  <span className="text-[10px] text-slate-500 block mt-0.5">Benchmark ottimale &lt; 0.22</span>
+                </div>
+
+                <div className="p-3 bg-slate-950 rounded border border-slate-800">
+                  <span className="text-[10px] text-slate-500 block font-sans">Ranked Probability (RPS)</span>
+                  <span className="text-lg font-bold text-cyan-400 tabular-nums">
+                    {validationMetrics.rankedProbabilityScore}
+                  </span>
+                  <span className="text-[10px] text-slate-500 block mt-0.5">Penalizza errori ordinali</span>
+                </div>
+
+                <div className="p-3 bg-slate-950 rounded border border-slate-800">
+                  <span className="text-[10px] text-slate-500 block font-sans">Log Loss (Cross-Entropy)</span>
+                  <span className="text-lg font-bold text-white tabular-nums">
+                    {validationMetrics.logLoss1X2}
+                  </span>
+                  <span className="text-[10px] text-slate-500 block mt-0.5">Distanza informativa</span>
+                </div>
+
+                <div className="p-3 bg-slate-950 rounded border border-slate-800">
+                  <span className="text-[10px] text-slate-500 block font-sans">Brier Over 2.5 / BTTS</span>
+                  <span className="text-lg font-bold text-amber-400 tabular-nums">
+                    {validationMetrics.brierScoreOver25} / {validationMetrics.brierScoreBtts}
+                  </span>
+                  <span className="text-[10px] text-slate-500 block mt-0.5">Calibrazione mercati gol</span>
+                </div>
+              </div>
+
+              {/* Overdispersion test panel */}
+              <div className="mt-4 p-3 bg-slate-950 rounded border border-slate-800 font-mono text-xs">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-slate-300 font-sans font-semibold">Test Overdispersion Reti Totali:</span>
+                  <span className={validationMetrics.isOverdispersed ? 'text-amber-400 font-bold' : 'text-emerald-400 font-bold'}>
+                    Var/Media = {validationMetrics.overdispersionRatio}
+                  </span>
+                </div>
+                <p className="text-[11px] font-sans text-slate-400 leading-relaxed">
+                  Media gol: <strong className="text-slate-200">{validationMetrics.meanGoals}</strong> · Varianza gol: <strong className="text-slate-200">{validationMetrics.varianceGoals}</strong>. 
+                  {validationMetrics.isOverdispersed
+                    ? ' Poiché la varianza supera sensibilmente la media (>1.15), il modello adotta correzioni Dixon-Coles e Binomiale Negativa per catturare i pareggi a basso punteggio.'
+                    : ' La distribuzione dei gol è perfettamente conforme a Poisson semplice (Var ≈ Media).'}
+                </p>
+              </div>
+            </div>
+
+            {/* Calibration Plot / Buckets */}
+            <div className="p-5 bg-slate-900/60 border border-slate-800 rounded-lg flex flex-col justify-between">
+              <div>
+                <h4 className="text-sm font-bold text-white mb-2 flex items-center gap-2">
+                  <BarChart2 className="w-4 h-4 text-cyan-400" />
+                  <span>Curva di Calibrazione delle Quote (Fasce Probabilità)</span>
+                </h4>
+                <p className="text-xs text-slate-400 mb-4 leading-relaxed">
+                  Confronto tra probabilità attesa stimata dal banco e percentuale reale di vittorie osservata:
+                </p>
+
+                <div className="space-y-2.5 font-mono text-xs">
+                  {validationMetrics.calibrationBuckets.map((bucket, i) => {
+                    const isOver = bucket.calibrationGapPct > 0;
+                    return (
+                      <div key={i} className="p-2.5 bg-slate-950 rounded border border-slate-800">
+                        <div className="flex items-center justify-between text-xs mb-1">
+                          <span className="text-slate-300 font-sans font-medium">Fascia {bucket.bucketLabel}</span>
+                          <span className="text-slate-400 text-[11px]">
+                            {bucket.sampleSize} partite analizzate
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] text-slate-400">
+                          <span>Attesa: <strong className="text-white">{bucket.expectedProbPct}%</strong></span>
+                          <span>Reale: <strong className="text-emerald-400">{bucket.observedFreqPct}%</strong></span>
+                          <span>
+                            Gap: <strong className={isOver ? 'text-emerald-400' : 'text-rose-400'}>
+                              {isOver ? `+${bucket.calibrationGapPct}%` : `${bucket.calibrationGapPct}%`}
+                            </strong>
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="mt-4 pt-3 border-t border-slate-800 text-[11px] font-sans text-slate-500">
+                Un gap vicino a 0 indica che il mercato prezza le probabilità con elevata efficienza quantitativa.
+              </div>
+            </div>
+          </div>
+
+          {/* Section 3: Market Biases Analysis (Favorite-Longshot, Draw, Home) */}
+          <div className="bg-slate-900/60 border border-slate-800 rounded-lg p-5">
+            <h4 className="text-sm font-bold text-white mb-2 flex items-center gap-2">
+              <Compass className="w-4 h-4 text-amber-400" />
+              <span>Diagnosi Empirica dei Bias di Mercato nel Dataset</span>
+            </h4>
+            <p className="text-xs text-slate-400 mb-4 leading-relaxed">
+              Verifica delle anomalie comportamentali storiche documentate nella letteratura del betting calcistico:
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 font-mono text-xs">
+              {/* Bias 1: Favorite-Longshot */}
+              <div className="p-4 bg-slate-950 rounded-lg border border-slate-800 flex flex-col justify-between">
+                <div>
+                  <span className="text-xs font-bold text-amber-400 font-sans block mb-1">
+                    Favorite-Longshot Bias
+                  </span>
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 my-2 pb-2 border-b border-slate-800">
+                    <span>ROI Favoriti (&le;1.60):</span>
+                    <strong className={marketBiases.favoriteLongshotBias.shortOddsRoiPct > 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                      {marketBiases.favoriteLongshotBias.shortOddsRoiPct}%
+                    </strong>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 my-2 pb-2 border-b border-slate-800">
+                    <span>ROI Longshot (&ge;4.50):</span>
+                    <strong className={marketBiases.favoriteLongshotBias.longOddsRoiPct > 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                      {marketBiases.favoriteLongshotBias.longOddsRoiPct}%
+                    </strong>
+                  </div>
+                </div>
+                <p className="text-[11px] font-sans text-slate-400 mt-2 leading-relaxed">
+                  {marketBiases.favoriteLongshotBias.verdict}
+                </p>
+              </div>
+
+              {/* Bias 2: Draw Bias */}
+              <div className="p-4 bg-slate-950 rounded-lg border border-slate-800 flex flex-col justify-between">
+                <div>
+                  <span className="text-xs font-bold text-cyan-400 font-sans block mb-1">
+                    Draw Bias (Pareggi)
+                  </span>
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 my-2 pb-2 border-b border-slate-800">
+                    <span>Pareggi Reali (%):</span>
+                    <strong className="text-white">{marketBiases.drawBias.drawActualPct}%</strong>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 my-2 pb-2 border-b border-slate-800">
+                    <span>Probabilità Implicita:</span>
+                    <strong className="text-slate-300">{marketBiases.drawBias.drawImpliedPct}%</strong>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 my-2 pb-2 border-b border-slate-800">
+                    <span>ROI Scommessa Segno X:</span>
+                    <strong className={marketBiases.drawBias.drawRoiPct > 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                      {marketBiases.drawBias.drawRoiPct > 0 ? `+${marketBiases.drawBias.drawRoiPct}%` : `${marketBiases.drawBias.drawRoiPct}%`}
+                    </strong>
+                  </div>
+                </div>
+                <p className="text-[11px] font-sans text-slate-400 mt-2 leading-relaxed">
+                  {marketBiases.drawBias.verdict}
+                </p>
+              </div>
+
+              {/* Bias 3: Home Advantage Bias */}
+              <div className="p-4 bg-slate-950 rounded-lg border border-slate-800 flex flex-col justify-between">
+                <div>
+                  <span className="text-xs font-bold text-emerald-400 font-sans block mb-1">
+                    Home Advantage Bias
+                  </span>
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 my-2 pb-2 border-b border-slate-800">
+                    <span>Vittorie Casa Effettive:</span>
+                    <strong className="text-emerald-400">{marketBiases.homeAdvantageBias.homeWinActualPct}%</strong>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 my-2 pb-2 border-b border-slate-800">
+                    <span>Probabilità Implicita:</span>
+                    <strong className="text-slate-300">{marketBiases.homeAdvantageBias.homeWinImpliedPct}%</strong>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 my-2 pb-2 border-b border-slate-800">
+                    <span>ROI Scommessa Segno 1:</span>
+                    <strong className={marketBiases.homeAdvantageBias.homeRoiPct > 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                      {marketBiases.homeAdvantageBias.homeRoiPct > 0 ? `+${marketBiases.homeAdvantageBias.homeRoiPct}%` : `${marketBiases.homeAdvantageBias.homeRoiPct}%`}
+                    </strong>
+                  </div>
+                </div>
+                <p className="text-[11px] font-sans text-slate-400 mt-2 leading-relaxed">
+                  {marketBiases.homeAdvantageBias.verdict}
+                </p>
+              </div>
             </div>
           </div>
         </div>

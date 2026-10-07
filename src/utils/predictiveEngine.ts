@@ -274,6 +274,8 @@ export function computeTeamStats(matches: Match[], config?: Partial<AnalysisConf
       eloRank: 1,
       homeDominanceRatio: data.points > 0 ? Number(((data.homePoints / data.points) * 100).toFixed(1)) : 50,
       cornerDifferential: data.cornersTaken - data.cornersConceded,
+      cornersTotal: data.cornersTaken,
+      cornersConcededTotal: data.cornersConceded,
       comebacksCount: data.comebacks,
     });
   });
@@ -504,12 +506,30 @@ export function computePredictiveProfiles(
       archetypeDescription = 'Costruisce buone trame offensive ma paga una finalizzazione deficitaria e scarsa freddezza sotto porta.';
     }
 
-    // 7. Stima punti finali (Monte Carlo rapido su calendario standard 38 gare) con peso personalizzato
+    // 7. Stima Monte Carlo estesa: Punti, Gol Fatti (GF), Gol Subiti (GS) e Calci d'Angolo
     const targetGames = 38;
     const remainingGames = Math.max(0, targetGames - ts.played);
     const expectedPointsRemaining = remainingGames * (seasonPpg * seasonWeight + recentPpg * recentWeight);
     const projectedPointsMedian = Math.round(ts.points + expectedPointsRemaining);
     const pointsUncertainty = Math.round(Math.sqrt(remainingGames) * 3);
+
+    // Proiezioni Monte Carlo Gol Fatti (GF) e Gol Subiti (GS)
+    const avgGfPerGame = ts.played > 0 ? (ts.goalsFor / ts.played) : 1.35;
+    const avgGaPerGame = ts.played > 0 ? (ts.goalsAgainst / ts.played) : 1.25;
+    const expGfRemaining = remainingGames * (avgGfPerGame * (attackRating * 0.6 + 0.4));
+    const expGaRemaining = remainingGames * (avgGaPerGame * (defenseRating * 0.6 + 0.4));
+    const projectedGoalsForMedian = Math.round(ts.goalsFor + expGfRemaining);
+    const gfUncertainty = Math.round(Math.sqrt(remainingGames) * 2.1);
+    const projectedGoalsAgainstMedian = Math.round(ts.goalsAgainst + expGaRemaining);
+    const gaUncertainty = Math.round(Math.sqrt(remainingGames) * 2.1);
+    const projectedGoalDiffMedian = projectedGoalsForMedian - projectedGoalsAgainstMedian;
+
+    // Proiezioni Monte Carlo Calci d'Angolo (Corner)
+    const avgCornersPerGame = ts.played > 0 && ts.cornersTotal ? (ts.cornersTotal / ts.played) : (5.2 * (attackRating * 0.6 + 0.4));
+    const expCornersRemaining = remainingGames * avgCornersPerGame;
+    const currentCorners = ts.cornersTotal ?? Math.round(ts.played * avgCornersPerGame);
+    const projectedCornersMedian = Math.round(currentCorners + expCornersRemaining);
+    const cornerUncertainty = Math.round(Math.sqrt(remainingGames) * 4.2);
 
     // Stima probabilità indicative per i traguardi principali
     let titleProb = 0;
@@ -552,6 +572,22 @@ export function computePredictiveProfiles(
         Math.max(ts.points, projectedPointsMedian - pointsUncertainty),
         projectedPointsMedian + pointsUncertainty
       ],
+      projectedGoalsForMedian,
+      projectedGoalsForRange: [
+        Math.max(ts.goalsFor, projectedGoalsForMedian - gfUncertainty),
+        projectedGoalsForMedian + gfUncertainty
+      ],
+      projectedGoalsAgainstMedian,
+      projectedGoalsAgainstRange: [
+        Math.max(ts.goalsAgainst, projectedGoalsAgainstMedian - gaUncertainty),
+        projectedGoalsAgainstMedian + gaUncertainty
+      ],
+      projectedGoalDiffMedian,
+      projectedCornersMedian,
+      projectedCornersRange: [
+        Math.max(currentCorners, projectedCornersMedian - cornerUncertainty),
+        projectedCornersMedian + cornerUncertainty
+      ],
       titleProbability: titleProb,
       top4Probability: top4Prob,
       relegationProbability: relProb
@@ -587,7 +623,7 @@ export function simulateMatch(
   const lambdaHome = Math.max(0.2, (avgHomeGoals * (homeFactor / 1.12)) * hAtt * aDef);
   const lambdaAway = Math.max(0.15, avgAwayGoals * aAtt * hDef);
 
-  // Calcola matrice di probabilità fino a 6 gol per squadra
+  // Calcola matrice di probabilità fino a 6 gol per squadra con aggiustamento Dixon-Coles (1997)
   const maxGoals = 6;
   const grid: number[][] = [];
   let homeWinProb = 0;
@@ -598,32 +634,57 @@ export function simulateMatch(
   let over25Prob = 0;
   let over35Prob = 0;
 
-  const scoreList: Array<{ score: string; home: number; away: number; probability: number }> = [];
+  // Parametro di correlazione Dixon-Coles per punteggi bassi (0-0, 1-0, 0-1, 1-1)
+  const rho = -0.11;
+  const dixonColesTau = (x: number, y: number, lH: number, lA: number): number => {
+    if (x === 0 && y === 0) return Math.max(0.1, 1 - lH * lA * rho);
+    if (x === 0 && y === 1) return Math.max(0.1, 1 + lH * rho);
+    if (x === 1 && y === 0) return Math.max(0.1, 1 + lA * rho);
+    if (x === 1 && y === 1) return Math.max(0.1, 1 - rho);
+    return 1.0;
+  };
+
+  const rawScoreList: Array<{ score: string; home: number; away: number; rawProb: number }> = [];
+  let sumTotalProbs = 0;
 
   for (let i = 0; i <= maxGoals; i++) {
     grid[i] = [];
     const pHome = poissonProbability(i, lambdaHome);
     for (let j = 0; j <= maxGoals; j++) {
       const pAway = poissonProbability(j, lambdaAway);
-      const prob = pHome * pAway;
+      const tauFactor = dixonColesTau(i, j, lambdaHome, lambdaAway);
+      const prob = pHome * pAway * tauFactor;
       grid[i][j] = prob;
+      sumTotalProbs += prob;
 
-      if (i > j) homeWinProb += prob;
-      else if (j > i) awayWinProb += prob;
-      else drawProb += prob;
-
-      if (i > 0 && j > 0) bttsProb += prob;
-      if (i + j > 1.5) over15Prob += prob;
-      if (i + j > 2.5) over25Prob += prob;
-      if (i + j > 3.5) over35Prob += prob;
-
-      scoreList.push({
+      rawScoreList.push({
         score: `${i} - ${j}`,
         home: i,
         away: j,
-        probability: Number((prob * 100).toFixed(1))
+        rawProb: prob,
       });
     }
+  }
+
+  // Normalizza su somma totale per chiudere al 100%
+  const scoreList: Array<{ score: string; home: number; away: number; probability: number }> = [];
+  for (const item of rawScoreList) {
+    const normalizedProb = sumTotalProbs > 0 ? item.rawProb / sumTotalProbs : item.rawProb;
+    if (item.home > item.away) homeWinProb += normalizedProb;
+    else if (item.away > item.home) awayWinProb += normalizedProb;
+    else drawProb += normalizedProb;
+
+    if (item.home > 0 && item.away > 0) bttsProb += normalizedProb;
+    if (item.home + item.away > 1.5) over15Prob += normalizedProb;
+    if (item.home + item.away > 2.5) over25Prob += normalizedProb;
+    if (item.home + item.away > 3.5) over35Prob += normalizedProb;
+
+    scoreList.push({
+      score: item.score,
+      home: item.home,
+      away: item.away,
+      probability: Number((normalizedProb * 100).toFixed(1)),
+    });
   }
 
   // Normalizza probabilità 1X2 al 100%
@@ -636,12 +697,94 @@ export function simulateMatch(
   scoreList.sort((a, b) => b.probability - a.probability);
   const topScores = scoreList.slice(0, 5);
 
-  // Calcolo calci d'angolo attesi
-  const expectedHomeCorners = Math.max(3.2, 5.1 * (hAtt * 0.7 + 0.3));
-  const expectedAwayCorners = Math.max(2.8, 4.3 * (aAtt * 0.7 + 0.3));
+  // Calcolo calci d'angolo attesi e distribuzione Poisson estesa
+  const expectedHomeCorners = Math.max(2.8, Number((5.1 * (hAtt * 0.65 + 0.35)).toFixed(1)));
+  const expectedAwayCorners = Math.max(2.2, Number((4.4 * (aAtt * 0.65 + 0.35)).toFixed(1)));
   const expectedTotalCorners = Number((expectedHomeCorners + expectedAwayCorners).toFixed(1));
-  const cornerOver85Prob = Math.min(88, Math.max(25, Math.round(52 + (expectedTotalCorners - 9.4) * 8.5)));
-  const cornerOver95Prob = Math.min(82, Math.max(18, Math.round(42 + (expectedTotalCorners - 9.4) * 8.5)));
+
+  // Funzione cumulativa Poisson per corner totali
+  const cornerProbAtLeast = (line: number, lambda: number): number => {
+    let sumUnder = 0;
+    for (let k = 0; k < line; k++) {
+      sumUnder += poissonProbability(k, lambda);
+    }
+    return Math.max(1, Math.min(99, Number(((1 - sumUnder) * 100).toFixed(1))));
+  };
+
+  const cornerOver65Prob = cornerProbAtLeast(7, expectedTotalCorners);
+  const cornerUnder65Prob = Number((100 - cornerOver65Prob).toFixed(1));
+  const cornerOver75Prob = cornerProbAtLeast(8, expectedTotalCorners);
+  const cornerUnder75Prob = Number((100 - cornerOver75Prob).toFixed(1));
+  const cornerOver85Prob = cornerProbAtLeast(9, expectedTotalCorners);
+  const cornerUnder85Prob = Number((100 - cornerOver85Prob).toFixed(1));
+  const cornerOver95Prob = cornerProbAtLeast(10, expectedTotalCorners);
+  const cornerUnder95Prob = Number((100 - cornerOver95Prob).toFixed(1));
+  const cornerOver105Prob = cornerProbAtLeast(11, expectedTotalCorners);
+  const cornerUnder105Prob = Number((100 - cornerOver105Prob).toFixed(1));
+  const cornerOver115Prob = cornerProbAtLeast(12, expectedTotalCorners);
+  const cornerUnder115Prob = Number((100 - cornerOver115Prob).toFixed(1));
+  const cornerOver125Prob = cornerProbAtLeast(13, expectedTotalCorners);
+  const cornerUnder125Prob = Number((100 - cornerOver125Prob).toFixed(1));
+  const cornerOver135Prob = cornerProbAtLeast(14, expectedTotalCorners);
+  const cornerUnder135Prob = Number((100 - cornerOver135Prob).toFixed(1));
+  const cornerOver145Prob = cornerProbAtLeast(15, expectedTotalCorners);
+  const cornerUnder145Prob = Number((100 - cornerOver145Prob).toFixed(1));
+
+  // Corner per singola squadra
+  const cornerHomeOver35Prob = cornerProbAtLeast(4, expectedHomeCorners);
+  const cornerHomeOver45Prob = cornerProbAtLeast(5, expectedHomeCorners);
+  const cornerHomeOver55Prob = cornerProbAtLeast(6, expectedHomeCorners);
+  const cornerAwayOver25Prob = cornerProbAtLeast(3, expectedAwayCorners);
+  const cornerAwayOver35Prob = cornerProbAtLeast(4, expectedAwayCorners);
+  const cornerAwayOver45Prob = cornerProbAtLeast(5, expectedAwayCorners);
+
+  // Fasce Corner (0-8, 9-11, 12-14, 15+ e 12+)
+  const prob0to8 = Number((100 - cornerOver85Prob).toFixed(1));
+  const prob12plus = cornerOver115Prob;
+  const prob15plus = cornerOver145Prob;
+  const prob12to14 = Math.max(2, Number((prob12plus - prob15plus).toFixed(1)));
+  const prob9to11 = Math.max(5, Number((100 - prob0to8 - prob12plus).toFixed(1)));
+
+  // Corner 1X2 (Chi batte più corner)
+  const cornerDiff = expectedHomeCorners - expectedAwayCorners;
+  const cornerHomeMost = Math.min(88, Math.max(15, Math.round(48 + cornerDiff * 9.5)));
+  const cornerAwayMost = Math.min(80, Math.max(12, Math.round(38 - cornerDiff * 9.0)));
+  const cornerEqual = Math.max(6, 100 - cornerHomeMost - cornerAwayMost);
+
+  // Probabilità Multigol e Over 4.5
+  let over45 = 0;
+  let mg13 = 0;
+  let mg24 = 0;
+  let mg25 = 0;
+  let combo1O25 = 0;
+  let combo1NG = 0;
+  let comboXU25 = 0;
+  let comboO25GG = 0;
+
+  for (const item of rawScoreList) {
+    const totG = item.home + item.away;
+    const normP = sumTotalProbs > 0 ? item.rawProb / sumTotalProbs : item.rawProb;
+    if (totG > 4.5) over45 += normP;
+    if (totG >= 1 && totG <= 3) mg13 += normP;
+    if (totG >= 2 && totG <= 4) mg24 += normP;
+    if (totG >= 2 && totG <= 5) mg25 += normP;
+
+    // Combo esiti
+    if (item.home > item.away && totG > 2.5) combo1O25 += normP;
+    if (item.home > item.away && (item.home === 0 || item.away === 0)) combo1NG += normP;
+    if (item.home === item.away && totG <= 2.5) comboXU25 += normP;
+    if (totG > 2.5 && item.home > 0 && item.away > 0) comboO25GG += normP;
+  }
+
+  const over45Prob = Number((over45 * 100).toFixed(1));
+  const under45Prob = Number(((1 - over45) * 100).toFixed(1));
+  const multigoal13Prob = Number((mg13 * 100).toFixed(1));
+  const multigoal24Prob = Number((mg24 * 100).toFixed(1));
+  const multigoal25Prob = Number((mg25 * 100).toFixed(1));
+  const combo1AndOver25Prob = Number((combo1O25 * 100).toFixed(1));
+  const combo1AndNoGoalProb = Number((combo1NG * 100).toFixed(1));
+  const comboXAndUnder25Prob = Number((comboXU25 * 100).toFixed(1));
+  const comboOver25AndGoalProb = Number((comboO25GG * 100).toFixed(1));
 
   // Helper per generare pronostici con quota di riferimento consigliata (+EV)
   function createTip(
@@ -735,7 +878,7 @@ export function simulateMatch(
       `Bassa frequenza di pareggio stimata, match aperto che favorisce una vittoria da una delle due parti (${(normHome + normAway).toFixed(1)}%).`
     ),
 
-    // Under / Over
+    // Under / Over Gol Estesi
     createTip(
       'Under / Over',
       'Under / Over 1.5',
@@ -771,6 +914,13 @@ export function simulateMatch(
       (1 - over35Prob) * 100,
       `Margine di sicurezza elevato: meno di 4 reti complessive attese nell'${((1 - over35Prob) * 100).toFixed(1)}% delle simulazioni.`
     ),
+    createTip(
+      'Under / Over',
+      'Under / Over 4.5',
+      'Under 4.5 Gol',
+      under45Prob,
+      `Copertura difensiva solida: quasi la totalità delle simulazioni (${under45Prob}%) rimane sotto le 5 reti.`
+    ),
 
     // Goal / No Goal
     createTip(
@@ -788,20 +938,155 @@ export function simulateMatch(
       `Clean sheet atteso da parte di una delle due difese o pareggio a reti bianche (${((1 - bttsProb) * 100).toFixed(1)}%).`
     ),
 
-    // Calci d'Angolo
+    // Combo & Multigol
+    createTip(
+      'Combo & Multigol',
+      'Multigol',
+      'Multigol 1-3 Gol',
+      multigoal13Prob,
+      `Fascia di segnatura tipica dei campionati equilibrati: copre ${multigoal13Prob}% delle simulazioni.`
+    ),
+    createTip(
+      'Combo & Multigol',
+      'Multigol',
+      'Multigol 2-4 Gol',
+      multigoal24Prob,
+      `Intervallo ad alta resa che include i risultati 2-0, 1-1, 2-1, 3-1 (${multigoal24Prob}% di stima).`
+    ),
+    createTip(
+      'Combo & Multigol',
+      'Combo Esito + Gol',
+      `Combo 1 + Over 2.5 (${homeTeam})`,
+      combo1AndOver25Prob,
+      `Vittoria di ${homeTeam} accompagnata da almeno 3 reti totali nell'incontro (${combo1AndOver25Prob}%).`
+    ),
+    createTip(
+      'Combo & Multigol',
+      'Combo Esito + Goal',
+      'Combo Over 2.5 + Goal',
+      comboOver25AndGoalProb,
+      `Incontro vivace dove entrambe le squadre vanno a referto e si supera la soglia dei 2.5 gol (${comboOver25AndGoalProb}%).`
+    ),
+
+    // Calci d'Angolo - Range Esteso
     createTip(
       'Corner',
-      'Calci d\'Angolo',
-      'Over 8.5 Calci d\'Angolo',
+      'Calci d\'Angolo Over/Under',
+      'Over 6.5 Corner',
+      cornerOver65Prob,
+      `Soglia ultra-prudente: proiezione di almeno 7 calci d'angolo con affidabilità probabilistica del ${cornerOver65Prob}%.`
+    ),
+    createTip(
+      'Corner',
+      'Calci d\'Angolo Over/Under',
+      'Over 7.5 Corner',
+      cornerOver75Prob,
+      `Soglia prudente: proiezione solida di almeno 8 calci d'angolo con probabilità del ${cornerOver75Prob}%.`
+    ),
+    createTip(
+      'Corner',
+      'Calci d\'Angolo Over/Under',
+      'Over 8.5 Corner',
       cornerOver85Prob,
       `Media combinata stimata a ${expectedTotalCorners} corner totali grazie all'ampiezza delle corsie esterne di entrambe le squadre.`
     ),
     createTip(
       'Corner',
-      'Calci d\'Angolo',
-      'Over 9.5 Calci d\'Angolo',
+      'Calci d\'Angolo Over/Under',
+      'Under 8.5 Corner',
+      cornerUnder85Prob,
+      `Scenario a baricentro basso o gioco prevalentemente per vie centrali (${cornerUnder85Prob}% Under 8.5).`
+    ),
+    createTip(
+      'Corner',
+      'Calci d\'Angolo Over/Under',
+      'Over 9.5 Corner',
       cornerOver95Prob,
       `Frequente ricorso a cross e tiri deviati che spinge il volume corner sopra la media ordinaria (${cornerOver95Prob}%).`
+    ),
+    createTip(
+      'Corner',
+      'Calci d\'Angolo Over/Under',
+      'Under 9.5 Corner',
+      cornerUnder95Prob,
+      `Tattica incentrata sulle vie centrali e limitate sovrapposizioni delle ali (${cornerUnder95Prob}% Under 9.5).`
+    ),
+    createTip(
+      'Corner',
+      'Calci d\'Angolo Over/Under',
+      'Over 10.5 Corner',
+      cornerOver105Prob,
+      `Linee d'attacco verticali e alto volume di tiri respinti: ${cornerOver105Prob}% di superare 10 calci d'angolo.`
+    ),
+    createTip(
+      'Corner',
+      'Calci d\'Angolo Over/Under',
+      'Over 11.5 Corner',
+      cornerOver115Prob,
+      `Scenario ad altissima frequenza di corner con squadre dedite al pressing offensivo costante (${cornerOver115Prob}%).`
+    ),
+    createTip(
+      'Corner',
+      'Calci d\'Angolo Over/Under',
+      'Under 10.5 Corner',
+      cornerUnder105Prob,
+      `Previsione di match tattico con baricentro equilibrato e tiri diretti senza deviazioni (${cornerUnder105Prob}% Under 10.5).`
+    ),
+    createTip(
+      'Corner',
+      'Calci d\'Angolo Over/Under',
+      'Over 12.5 Corner',
+      cornerOver125Prob,
+      `Match ad altissima intensità e continui ribaltamenti di fronte sulle fasce (${cornerOver125Prob}%).`
+    ),
+    createTip(
+      'Corner',
+      'Calci d\'Angolo Over/Under',
+      'Over 13.5 Corner',
+      cornerOver135Prob,
+      `Range estremo: scontro tra formazioni a spinta laterale continua con proiezioni di oltre 13 corner (${cornerOver135Prob}%).`
+    ),
+    createTip(
+      'Corner',
+      'Calci d\'Angolo Over/Under',
+      'Over 14.5 Corner',
+      cornerOver145Prob,
+      `Soglia massima di volume corner per match con altissimo numero di cross e conclusioni deviate (${cornerOver145Prob}%).`
+    ),
+    createTip(
+      'Corner',
+      'Calci d\'Angolo 1X2',
+      `Maggior Numero Corner: 1 (${homeTeam})`,
+      cornerHomeMost,
+      `${homeTeam} proietta ${expectedHomeCorners} corner contro i ${expectedAwayCorners} di ${awayTeam} (${cornerHomeMost}% probabilità).`
+    ),
+    createTip(
+      'Corner',
+      'Calci d\'Angolo 1X2',
+      `Maggior Numero Corner: 2 (${awayTeam})`,
+      cornerAwayMost,
+      `${awayTeam} presenta corsie laterali ad alto volume offensivo con ${cornerAwayMost}% di battere più corner.`
+    ),
+    createTip(
+      'Corner',
+      'Corner Squadra',
+      `Casa Over 4.5 Corner (${homeTeam})`,
+      cornerHomeOver45Prob,
+      `Spinta costante di ${homeTeam} con proiezione interna di ${expectedHomeCorners} corner e ${cornerHomeOver45Prob}% di superare quota 4.5.`
+    ),
+    createTip(
+      'Corner',
+      'Corner Squadra',
+      `Ospite Over 3.5 Corner (${awayTeam})`,
+      cornerAwayOver35Prob,
+      `Capacità di transizione esterna di ${awayTeam} che genera mediamente ${expectedAwayCorners} corner con il ${cornerAwayOver35Prob}% Over 3.5.`
+    ),
+    createTip(
+      'Corner',
+      'Fasce Corner',
+      'Fascia Corner 9-11',
+      prob9to11,
+      `Intervallo mediano più probabile nel calcio moderno: copre il ${prob9to11}% della distribuzione congiunta.`
     ),
 
     // Risultato Esatto #1
@@ -810,7 +1095,7 @@ export function simulateMatch(
       'Risultato Esatto',
       `Risultato Esatto ${topScores[0]?.score || '1 - 1'}`,
       topScores[0]?.probability || 14.5,
-      `Punteggio singolo con la frequenza percentuale dominante (${topScores[0]?.probability || 14.5}%) nella distribuzione multivariata.`
+      `Punteggio singolo con la frequenza percentuale dominante (${topScores[0]?.probability || 14.5}%) nella distribuzione multivariata con correzione Dixon-Coles.`
     ),
   ];
 
@@ -833,12 +1118,55 @@ export function simulateMatch(
     under25Prob: Number(((1 - over25Prob) * 100).toFixed(1)),
     over35Prob: Number((over35Prob * 100).toFixed(1)),
     under35Prob: Number(((1 - over35Prob) * 100).toFixed(1)),
+    over45Prob,
+    under45Prob,
     doubleChance1XProb: Math.min(99, Number((normHome + normDraw).toFixed(1))),
     doubleChanceX2Prob: Math.min(99, Number((normAway + normDraw).toFixed(1))),
     doubleChance12Prob: Math.min(99, Number((normHome + normAway).toFixed(1))),
+    multigoal13Prob,
+    multigoal24Prob,
+    multigoal25Prob,
+    combo1AndOver25Prob,
+    combo1AndNoGoalProb,
+    comboXAndUnder25Prob,
+    comboOver25AndGoalProb,
+    expectedHomeCorners,
+    expectedAwayCorners,
     expectedTotalCorners,
+    cornerOver65Prob,
+    cornerUnder65Prob,
+    cornerOver75Prob,
+    cornerUnder75Prob,
     cornerOver85Prob,
+    cornerUnder85Prob,
     cornerOver95Prob,
+    cornerUnder95Prob,
+    cornerOver105Prob,
+    cornerUnder105Prob,
+    cornerOver115Prob,
+    cornerUnder115Prob,
+    cornerOver125Prob,
+    cornerUnder125Prob,
+    cornerOver135Prob,
+    cornerUnder135Prob,
+    cornerOver145Prob,
+    cornerUnder145Prob,
+    cornerHomeOver35Prob,
+    cornerHomeOver45Prob,
+    cornerHomeOver55Prob,
+    cornerAwayOver25Prob,
+    cornerAwayOver35Prob,
+    cornerAwayOver45Prob,
+    cornerHomeMostProb: cornerHomeMost,
+    cornerAwayMostProb: cornerAwayMost,
+    cornerEqualProb: cornerEqual,
+    cornerRangeProbs: {
+      range0to8: prob0to8,
+      range9to11: prob9to11,
+      range12to14: prob12to14,
+      range15plus: prob15plus,
+      range12plus: prob12plus,
+    },
     mostLikelyScores: topScores,
     bettingAdviceList: adviceList,
   };
