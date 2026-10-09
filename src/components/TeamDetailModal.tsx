@@ -154,7 +154,7 @@ export const TeamDetailModal: React.FC<TeamDetailModalProps> = ({
             <h3 className="text-xs font-mono uppercase text-slate-400 mb-3 tracking-wider">
               Indicatori di Efficienza Avanzati
             </h3>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono text-xs">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 font-mono text-xs">
               <div className="p-3 bg-slate-950 rounded border border-slate-800">
                 <span className="text-slate-500 block text-[11px]">Tiri a Partita</span>
                 <span className="text-base font-bold text-white mt-0.5">{teamStats.shotsPerGame}</span>
@@ -168,8 +168,16 @@ export const TeamDetailModal: React.FC<TeamDetailModalProps> = ({
                 <span className="text-base font-bold text-emerald-400 mt-0.5">{teamStats.cleanSheets} gare</span>
               </div>
               <div className="p-3 bg-slate-950 rounded border border-slate-800">
-                <span className="text-slate-500 block text-[11px]">Possesso Palla Medio</span>
+                <span className="text-slate-500 block text-[11px]">Possesso Palla</span>
                 <span className="text-base font-bold text-white mt-0.5">{teamStats.avgPossession}%</span>
+              </div>
+              <div className="p-3 bg-slate-950 rounded border border-slate-800">
+                <span className="text-slate-500 block text-[11px]">Corner Fatti/Partita</span>
+                <span className="text-base font-bold text-purple-400 mt-0.5">
+                  {teamStats.played > 0 && teamStats.cornersTaken !== undefined
+                    ? (teamStats.cornersTaken / teamStats.played).toFixed(1)
+                    : '-'}
+                </span>
               </div>
             </div>
           </div>
@@ -217,6 +225,11 @@ export const TeamDetailModal: React.FC<TeamDetailModalProps> = ({
                       <span className="text-slate-100 font-bold">
                         {teamGoals} - {oppGoals}
                       </span>
+                      {m.homeCorners !== undefined && m.awayCorners !== undefined && (
+                        <span className="text-purple-400 text-[11px]">
+                          Corner {isHome ? m.homeCorners : m.awayCorners}-{isHome ? m.awayCorners : m.homeCorners}
+                        </span>
+                      )}
                       <span className="text-slate-500 text-[11px]">
                         xG {isHome ? m.homeXg : m.awayXg} vs {isHome ? m.awayXg : m.homeXg}
                       </span>

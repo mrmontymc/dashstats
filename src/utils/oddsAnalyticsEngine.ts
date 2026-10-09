@@ -10,6 +10,7 @@ import {
   MatchCustomOdds,
   HistoricalOddsStats,
   HistoricalOddsMatchRecord,
+  HistoricalOddsMatchOptions,
   StatisticalCorrelationPair,
   MarketConditionalProbability,
   NoVigComparisonResult,
@@ -18,23 +19,35 @@ import {
 } from '../types/football';
 
 /**
- * Fasce di quota standard per l'analisi dei range
+ * Fasce di quota mirate e a range ridotto per l'analisi specifica del mercato
  */
 const DEFAULT_1X2_BRACKETS = [
-  { label: 'Ultra Favorita (1.10 - 1.40)', min: 1.10, max: 1.40 },
-  { label: 'Favorita Solida (1.41 - 1.75)', min: 1.41, max: 1.75 },
-  { label: 'Favorita Moderata (1.76 - 2.15)', min: 1.76, max: 2.15 },
-  { label: 'In Equilibrio (2.16 - 2.80)', min: 2.16, max: 2.80 },
-  { label: 'Outsider Moderata (2.81 - 3.80)', min: 2.81, max: 3.80 },
-  { label: 'Sfavorita Marcata (3.81 - 6.00)', min: 3.81, max: 6.00 },
-  { label: 'Longshot (> 6.00)', min: 6.01, max: 99.00 },
+  { label: 'Top Favorita (1.10 - 1.25)', min: 1.10, max: 1.25 },
+  { label: 'Favorita Forte (1.26 - 1.40)', min: 1.26, max: 1.40 },
+  { label: 'Favorita Netta (1.41 - 1.55)', min: 1.41, max: 1.55 },
+  { label: 'Favorita Solida (1.56 - 1.70)', min: 1.56, max: 1.70 },
+  { label: 'Favorita Moderata (1.71 - 1.90)', min: 1.71, max: 1.90 },
+  { label: 'Favorita Leggera (1.91 - 2.10)', min: 1.91, max: 2.10 },
+  { label: 'Quasi Parità (2.11 - 2.35)', min: 2.11, max: 2.35 },
+  { label: 'Equilibrio / Contesa (2.36 - 2.65)', min: 2.36, max: 2.65 },
+  { label: 'Outsider Leggera (2.66 - 3.00)', min: 2.66, max: 3.00 },
+  { label: 'Outsider Media (3.01 - 3.50)', min: 3.01, max: 3.50 },
+  { label: 'Sfavorita Controllata (3.51 - 4.20)', min: 3.51, max: 4.20 },
+  { label: 'Sfavorita Marcata (4.21 - 5.50)', min: 4.21, max: 5.50 },
+  { label: 'Longshot (> 5.50)', min: 5.51, max: 99.00 },
 ];
 
 const DEFAULT_GOALS_BRACKETS = [
-  { label: 'Quote Basse (1.30 - 1.65)', min: 1.30, max: 1.65 },
-  { label: 'Quote Medie (1.66 - 2.05)', min: 1.66, max: 2.05 },
-  { label: 'Quote Alte (2.06 - 2.70)', min: 2.06, max: 2.70 },
-  { label: 'Quote Molto Alte (> 2.70)', min: 2.71, max: 99.00 },
+  { label: 'Altissima Probabilità (1.20 - 1.35)', min: 1.20, max: 1.35 },
+  { label: 'Forte Tendenza (1.36 - 1.50)', min: 1.36, max: 1.50 },
+  { label: 'Probabilità Solida (1.51 - 1.65)', min: 1.51, max: 1.65 },
+  { label: 'Media Moderata (1.66 - 1.80)', min: 1.66, max: 1.80 },
+  { label: 'Equilibrata / Coin Toss (1.81 - 1.95)', min: 1.81, max: 1.95 },
+  { label: 'Pari Quota / Neutra (1.96 - 2.15)', min: 1.96, max: 2.15 },
+  { label: 'Medio-Alta (2.16 - 2.40)', min: 2.16, max: 2.40 },
+  { label: 'Alta (2.41 - 2.75)', min: 2.41, max: 2.75 },
+  { label: 'Speculativa (2.76 - 3.30)', min: 2.76, max: 3.30 },
+  { label: 'Molto Alta / Rara (> 3.30)', min: 3.31, max: 99.00 },
 ];
 
 /**
@@ -642,83 +655,128 @@ export function findValueBets(
 }
 
 /**
- * Verifica lo storico dei risultati nel dataset in base alle quote offerte inserite dall'utente
+ * Verifica lo storico dei risultati nel dataset in base alle quote offerte inserite dall'utente.
+ * Regola vincolante: il confronto quote avviene per il mercato 1X2 (Base).
+ * I mercati Over/Under (2.5) e Goal/No Goal sono resi opzionali tramite configurazione utente.
+ * Le coppie di valori nella tolleranza (almeno 2 esiti coincidenti) vengono conteggiate
+ * e verificate rigorosamente solo all'interno dei mercati selezionati.
  */
 export function analyzeHistoricalMatchesWithOdds(
   matches: Match[],
   customOdds: MatchCustomOdds,
   toleranceMode: 'tight' | 'standard' | 'wide' | 'bracket' = 'standard',
-  flatStake = 100
+  flatStake = 100,
+  options: HistoricalOddsMatchOptions = {}
 ): HistoricalOddsStats {
+  const includeOverUnder = !!options.includeOverUnder;
+  const includeGoalNoGoal = !!options.includeGoalNoGoal;
+
   const hOdd = customOdds.homeOdds || 0;
   const dOdd = customOdds.drawOdds || 0;
   const aOdd = customOdds.awayOdds || 0;
   const o25Odd = customOdds.over25Odds || 0;
   const u25Odd = customOdds.under25Odds || 0;
   const bttsYesOdd = customOdds.bttsYesOdds || 0;
+  const bttsNoOdd = customOdds.bttsNoOdds || 0;
 
-  // Determina tolleranza numerica in base alla modalità
-  let hTol = 0.20;
-  let dTol = 0.25;
-  let aTol = 0.35;
-  let tolLabel = 'Standard (±0.20)';
+  // Determina etichetta mercati inclusi nella valutazione
+  const activeMarketLabels: string[] = ['1X2 (Base)'];
+  if (includeOverUnder) activeMarketLabels.push('Under/Over 2.5');
+  if (includeGoalNoGoal) activeMarketLabels.push('Goal/No Goal');
+  const includedMarketsLabel = activeMarketLabels.join(' + ');
+
+  // Determina tolleranza numerica in base alla modalità (resa significativamente più stringente e mirata)
+  let hTol = 0.10;
+  let dTol = 0.12;
+  let aTol = 0.15;
+  let goalTol = 0.10;
+  let tolLabel = `Stretta Mirata (±0.10/0.12/0.15 · min. 2 esiti in ${includedMarketsLabel})`;
 
   if (toleranceMode === 'tight') {
-    hTol = 0.10;
-    dTol = 0.15;
-    aTol = 0.20;
-    tolLabel = 'Stretta (±0.10)';
+    hTol = 0.05;
+    dTol = 0.08;
+    aTol = 0.10;
+    goalTol = 0.06;
+    tolLabel = `Ultra-Stretta Rigorosa (±0.05/0.08/0.10 · min. 2 esiti in ${includedMarketsLabel})`;
   } else if (toleranceMode === 'wide') {
-    hTol = 0.35;
-    dTol = 0.45;
-    aTol = 0.60;
-    tolLabel = 'Ampia (±0.35)';
+    hTol = 0.18;
+    dTol = 0.22;
+    aTol = 0.26;
+    goalTol = 0.16;
+    tolLabel = `Moderata Controllata (±0.18/0.22/0.26 · min. 2 esiti in ${includedMarketsLabel})`;
   } else if (toleranceMode === 'bracket') {
-    // Fascia di quota automatica
-    if (hOdd <= 1.45) { hTol = 0.15; dTol = 0.40; aTol = 1.50; }
-    else if (hOdd <= 1.85) { hTol = 0.20; dTol = 0.30; aTol = 0.80; }
-    else if (hOdd <= 2.40) { hTol = 0.25; dTol = 0.25; aTol = 0.50; }
-    else if (hOdd <= 3.20) { hTol = 0.35; dTol = 0.30; aTol = 0.40; }
-    else { hTol = 0.80; dTol = 0.40; aTol = 0.25; }
-    tolLabel = 'Fascia di Mercato';
+    // Fascia di quota automatica a range ridotto basata sulla favorita
+    if (hOdd <= 1.45) { hTol = 0.06; dTol = 0.14; aTol = 0.28; goalTol = 0.10; }
+    else if (hOdd <= 1.85) { hTol = 0.08; dTol = 0.14; aTol = 0.22; goalTol = 0.10; }
+    else if (hOdd <= 2.40) { hTol = 0.10; dTol = 0.12; aTol = 0.18; goalTol = 0.10; }
+    else if (hOdd <= 3.20) { hTol = 0.14; dTol = 0.12; aTol = 0.14; goalTol = 0.10; }
+    else { hTol = 0.20; dTol = 0.14; aTol = 0.10; goalTol = 0.10; }
+    tolLabel = `Fascia Ristretta (min. 2 esiti in ${includedMarketsLabel})`;
   }
 
-  // Filtra le partite con quote analoghe
-  const filtered = matches.filter((m) => {
-    if (!m.homeOdds) return false;
+  // Mappa delle coincidenze per ogni match
+  const matchCriteriaMap = new Map<string, { count: number; labels: string[] }>();
 
-    // Se inserita quota 1
-    if (hOdd > 1.0) {
-      if (Math.abs(m.homeOdds - hOdd) > hTol) return false;
+  // Filtra le partite su tutto il DB:
+  // Requisito vincolante: devono esserci ALMENO 2 quote coincidenti entro la tolleranza
+  // conteggiate SOLO nei mercati selezionati (1X2 obbligatorio/base, O/U e GG/NG opzionali)
+  const sampleMatches = matches.filter((m) => {
+    if (!m.homeOdds && !m.drawOdds && !m.awayOdds) return false;
+
+    let matchedCount = 0;
+    const labels: string[] = [];
+
+    // 1. Quota 1 (Casa) - Mercato 1X2 Base
+    if (hOdd > 1.0 && m.homeOdds && Math.abs(m.homeOdds - hOdd) <= hTol) {
+      matchedCount++;
+      labels.push(`1 @${m.homeOdds.toFixed(2)}`);
     }
 
-    // Se inserita quota X
-    if (dOdd > 1.0 && m.drawOdds) {
-      if (Math.abs(m.drawOdds - dOdd) > dTol) return false;
+    // 2. Quota X (Pareggio) - Mercato 1X2 Base
+    if (dOdd > 1.0 && m.drawOdds && Math.abs(m.drawOdds - dOdd) <= dTol) {
+      matchedCount++;
+      labels.push(`X @${m.drawOdds.toFixed(2)}`);
     }
 
-    // Se inserita quota 2
-    if (aOdd > 1.0 && m.awayOdds) {
-      if (Math.abs(m.awayOdds - aOdd) > aTol) return false;
+    // 3. Quota 2 (Trasferta) - Mercato 1X2 Base
+    if (aOdd > 1.0 && m.awayOdds && Math.abs(m.awayOdds - aOdd) <= aTol) {
+      matchedCount++;
+      labels.push(`2 @${m.awayOdds.toFixed(2)}`);
     }
 
-    // Se inserita quota Over 2.5
-    if (o25Odd > 1.0 && m.over25Odds) {
-      if (Math.abs(m.over25Odds - o25Odd) > 0.25) return false;
+    // 4. Mercato Over/Under 2.5 (Opzionale: incluso nella tolleranza solo se richiesto dall'utente)
+    if (includeOverUnder) {
+      if (o25Odd > 1.0 && m.over25Odds && Math.abs(m.over25Odds - o25Odd) <= goalTol) {
+        matchedCount++;
+        labels.push(`O2.5 @${m.over25Odds.toFixed(2)}`);
+      }
+      if (u25Odd > 1.0 && m.under25Odds && Math.abs(m.under25Odds - u25Odd) <= goalTol) {
+        matchedCount++;
+        labels.push(`U2.5 @${m.under25Odds.toFixed(2)}`);
+      }
     }
 
-    // Se inserita quota Goal
-    if (bttsYesOdd > 1.0 && m.bttsYesOdds) {
-      if (Math.abs(m.bttsYesOdds - bttsYesOdd) > 0.25) return false;
+    // 5. Mercato Goal/No Goal (Opzionale: incluso nella tolleranza solo se richiesto dall'utente)
+    if (includeGoalNoGoal) {
+      if (bttsYesOdd > 1.0 && m.bttsYesOdds && Math.abs(m.bttsYesOdds - bttsYesOdd) <= goalTol) {
+        matchedCount++;
+        labels.push(`GG @${m.bttsYesOdds.toFixed(2)}`);
+      }
+      if (bttsNoOdd > 1.0 && m.bttsNoOdds && Math.abs(m.bttsNoOdds - bttsNoOdd) <= goalTol) {
+        matchedCount++;
+        labels.push(`NG @${m.bttsNoOdds.toFixed(2)}`);
+      }
     }
 
-    return true;
+    // Requisito vincolante: devono esserci almeno due esiti con quote entro i riferimenti di tolleranza
+    // Se solo 1X2 è attivo, la coppia di valori deve verificarsi esclusivamente in {1, X, 2}
+    if (matchedCount >= 2) {
+      matchCriteriaMap.set(m.id, { count: matchedCount, labels });
+      return true;
+    }
+
+    return false;
   });
-
-  // Se i filtri combinati restituiscono meno di 4 partite, allarga al solo segno principale
-  const sampleMatches = filtered.length >= 4 
-    ? filtered 
-    : matches.filter((m) => m.homeOdds && hOdd > 1.0 && Math.abs(m.homeOdds - hOdd) <= (hTol * 1.5));
 
   const totalMatches = sampleMatches.length;
 
@@ -727,6 +785,12 @@ export function analyzeHistoricalMatchesWithOdds(
       totalMatches: 0,
       tolerance: hTol,
       toleranceLabel: tolLabel,
+      includedMarketsLabel,
+      includedMarkets: {
+        onex2: true,
+        overUnder: includeOverUnder,
+        goalNoGoal: includeGoalNoGoal,
+      },
       homeWinCount: 0,
       homeWinPct: 0,
       drawCount: 0,
@@ -751,7 +815,7 @@ export function analyzeHistoricalMatchesWithOdds(
       roiAwayPct: 0,
       profitAwayFlat: 0,
       bestOutcome: {
-        market: 'Nessun dato',
+        market: 'Nessun match con ≥2 quote coincidenti nei mercati selezionati',
         roiPct: 0,
         hitRatePct: 0,
         profitFlat: 0,
@@ -850,6 +914,8 @@ export function analyzeHistoricalMatchesWithOdds(
       homeXg: m.homeXg,
       awayXg: m.awayXg,
       oddsSource: m.oddsSource,
+      matchedOutcomes: matchCriteriaMap.get(m.id)?.labels || [],
+      matchedOutcomesCount: matchCriteriaMap.get(m.id)?.count || 2,
     });
   });
 
@@ -894,6 +960,12 @@ export function analyzeHistoricalMatchesWithOdds(
     totalMatches,
     tolerance: hTol,
     toleranceLabel: tolLabel,
+    includedMarketsLabel,
+    includedMarkets: {
+      onex2: true,
+      overUnder: includeOverUnder,
+      goalNoGoal: includeGoalNoGoal,
+    },
     homeWinCount: homeWins,
     homeWinPct: Number(((homeWins / totalMatches) * 100).toFixed(1)),
     drawCount: draws,
@@ -1477,7 +1549,7 @@ export function computeMarketBiases(matches: Match[]): MarketBiasReport {
     };
   }
 
-  // Favorite-Longshot Bias: quote < 1.60 vs quote > 4.50
+  // Favorite-Longshot Bias: controllo mirato favoriti solidi (quote <= 1.45) vs longshot speculativi (quote >= 4.80)
   let shortStake = 0;
   let shortPayout = 0;
   let longStake = 0;
@@ -1501,10 +1573,10 @@ export function computeMarketBiases(matches: Match[]): MarketBiasReport {
     // Check Short vs Long
     [hO, aO].forEach((odd, idx) => {
       const won = idx === 0 ? m.homeGoals > m.awayGoals : m.awayGoals > m.homeGoals;
-      if (odd <= 1.60) {
+      if (odd <= 1.45) {
         shortStake += 100;
         if (won) shortPayout += odd * 100;
-      } else if (odd >= 4.50) {
+      } else if (odd >= 4.80) {
         longStake += 100;
         if (won) longPayout += odd * 100;
       }

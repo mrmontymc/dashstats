@@ -34,8 +34,12 @@ export interface Match {
   homeOdds?: number;      // Quota 1 (Vittoria Casa)
   drawOdds?: number;      // Quota X (Pareggio)
   awayOdds?: number;      // Quota 2 (Vittoria Ospite)
+  over15Odds?: number;    // Quota Over 1.5
+  under15Odds?: number;   // Quota Under 1.5
   over25Odds?: number;    // Quota Over 2.5
   under25Odds?: number;   // Quota Under 2.5
+  over35Odds?: number;    // Quota Over 3.5
+  under35Odds?: number;   // Quota Under 3.5
   bttsYesOdds?: number;   // Quota Entrambe a Segno (Sì)
   bttsNoOdds?: number;    // Quota Entrambe a Segno (No)
   cornerOver95Odds?: number; // Quota Over 9.5 Corner
@@ -53,6 +57,7 @@ export interface AnalysisConfig {
   minSampleBets: number;       // Minimo partite/scommesse per validare un pattern (es. 8)
   preferredOddsSource?: string; // Filtro provenienza quote ('all' o specifico bookmaker)
   simulationsCount?: number;   // Iterazioni Monte Carlo (default 2000)
+  teamRecentMatchesLimit?: number; // Limite record recenti per squadra per pronostici (default 50)
 }
 
 export interface ValueBetMatch {
@@ -131,6 +136,69 @@ export interface ProfitableMarketPattern {
   confidenceScore: 'Molto Alto' | 'Alto' | 'Moderato';
 }
 
+/**
+ * Struttura di una partita estratta da Web Scraping quote online (SNAI, Eurobet, ecc.)
+ */
+export interface ScrapedMatchItem {
+  id: string;
+  homeTeam: string;
+  awayTeam: string;
+  competition: string;
+  date: string;
+  time?: string;
+  homeOdds: number;
+  drawOdds: number;
+  awayOdds: number;
+  over25Odds?: number;
+  under25Odds?: number;
+  bttsYesOdds?: number;
+  bttsNoOdds?: number;
+  sourceUrl: string;
+  sourceBookmaker: string;
+  overround: number;
+}
+
+/**
+ * Valutazione statistica incrociata per ciascuna partita estratta da Web Scraping
+ * Ordina e identifica le partite con evidenze e riferimenti statistici più rilevanti (+EV, discrepanze)
+ */
+export interface ScrapedMatchStatEvaluation {
+  match: ScrapedMatchItem;
+  fairHomeOdds: number;
+  fairDrawOdds: number;
+  fairAwayOdds: number;
+  fairOver25Odds: number;
+  fairUnder25Odds: number;
+  fairBttsYesOdds: number;
+  modelHomeProb: number;
+  modelDrawProb: number;
+  modelAwayProb: number;
+  modelOver25Prob: number;
+  modelBttsYesProb: number;
+  bestValueMarket: string;
+  bestValueEdgePct: number;
+  bestValueEvPct: number;
+  primaryHighlight: {
+    title: string;
+    description: string;
+    tag: 'value_bet' | 'over_under_anomaly' | 'draw_bias' | 'defensive_lock' | 'historical_edge';
+    badgeLabel: string;
+    color: 'emerald' | 'amber' | 'cyan' | 'purple' | 'blue';
+  };
+  interestScore: number; // Punteggio da 1 a 100 per ranking evidenza statistica
+  historicalMatchesCount: number;
+  homeMatchesInDb?: number;
+  awayMatchesInDb?: number;
+  headToHeadMatchesInDb?: number;
+  hasTeamsInDatabase: boolean;
+}
+
+export interface ExcludedScrapedMatch {
+  match: ScrapedMatchItem;
+  reason: string;
+  missingTeams: string[];
+}
+
 export interface TeamStats {
   team: string;
   played: number;
@@ -192,6 +260,8 @@ export interface TeamStats {
   cornerDifferential: number; // Angoli battuti - Angoli subiti
   cornersTotal?: number;       // Calci d'angolo battuti
   cornersConcededTotal?: number; // Calci d'angolo concessi
+  cornersTaken?: number;       // Calci d'angolo battuti (alias)
+  cornersConceded?: number;    // Calci d'angolo concessi (alias)
   comebacksCount: number;     // Partite rimontate (punti ottenuti dopo essere stati in svantaggio al 1T)
 }
 
@@ -257,6 +327,25 @@ export interface BettingAdviceTip {
   actionPhrase: string;        // e.g. "Punta l'esito Over 2.5 se il bookmaker offre almeno @1.80"
   rationale: string;           // Tactical and statistical motivation
   category: '1X2 & Doppia Chance' | 'Under / Over' | 'Goal / No Goal' | 'Corner' | 'Risultato Esatto' | 'Combo & Multigol';
+}
+
+export interface MonteCarloSimulationResult extends MatchSimulationResult {
+  iterations: number;
+  simulationModel: 'monte_carlo';
+  homeGoalsMean: number;
+  awayGoalsMean: number;
+  homeGoalsStdDev: number;
+  awayGoalsStdDev: number;
+  homeGoalsCI95: [number, number];
+  awayGoalsCI95: [number, number];
+  convergenceMarginErrorPct: number;
+  homeCleanSheetPct: number;
+  awayCleanSheetPct: number;
+  goalsDistribution: Array<{
+    goals: number;
+    count: number;
+    percentage: number;
+  }>;
 }
 
 export interface MatchSimulationResult {
@@ -380,12 +469,25 @@ export interface HistoricalOddsMatchRecord {
   homeXg?: number;
   awayXg?: number;
   oddsSource?: string;
+  matchedOutcomes?: string[];
+  matchedOutcomesCount?: number;
+}
+
+export interface HistoricalOddsMatchOptions {
+  includeOverUnder?: boolean;  // Se true, include Over/Under 2.5 nel vincolo di tolleranza e valutazione quote
+  includeGoalNoGoal?: boolean; // Se true, include Goal / No Goal nel vincolo di tolleranza e valutazione quote
 }
 
 export interface HistoricalOddsStats {
   totalMatches: number;
   tolerance: number;
   toleranceLabel: string;
+  includedMarketsLabel?: string;
+  includedMarkets?: {
+    onex2: boolean;
+    overUnder: boolean;
+    goalNoGoal: boolean;
+  };
   homeWinCount: number;
   homeWinPct: number;
   drawCount: number;

@@ -1,9 +1,9 @@
 import React from 'react';
-import { Activity, Upload, Database, Download, Sparkles, Coins, Sliders, Swords, Table } from 'lucide-react';
+import { Activity, Upload, Database, Download, Sparkles, Coins, Sliders, Swords, Table, BookOpen } from 'lucide-react';
 
 interface HeaderProps {
-  activeTab: 'standings' | 'predictions' | 'odds' | 'simulator' | 'matches';
-  setActiveTab: (tab: 'standings' | 'predictions' | 'odds' | 'simulator' | 'matches') => void;
+  activeTab: 'standings' | 'predictions' | 'odds' | 'simulator' | 'matches' | 'guide';
+  setActiveTab: (tab: 'standings' | 'predictions' | 'odds' | 'simulator' | 'matches' | 'guide') => void;
   onOpenUpload: () => void;
   onLoadSample: () => void;
   onLoadMultiLeague?: () => void;
@@ -47,10 +47,10 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
 
           {/* Centered Navigation for Desktop / Laptop (>= md) */}
-          <nav className="hidden md:flex items-center justify-center gap-1.5 lg:gap-2 flex-1 mx-2 max-w-2xl">
+          <nav className="hidden md:flex items-center justify-center gap-1 lg:gap-1.5 flex-1 mx-1 max-w-3xl">
             <button
               onClick={() => setActiveTab('standings')}
-              className={`px-3 lg:px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+              className={`px-2.5 lg:px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
                 activeTab === 'standings'
                   ? 'bg-slate-800 text-emerald-400 border border-slate-700/80 shadow-sm'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
@@ -60,7 +60,7 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
             <button
               onClick={() => setActiveTab('predictions')}
-              className={`px-3 lg:px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+              className={`px-2.5 lg:px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap flex items-center gap-1.5 ${
                 activeTab === 'predictions'
                   ? 'bg-slate-800 text-emerald-400 border border-slate-700/80 shadow-sm'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
@@ -71,7 +71,7 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
             <button
               onClick={() => setActiveTab('odds')}
-              className={`px-3 lg:px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+              className={`px-2.5 lg:px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap flex items-center gap-1.5 ${
                 activeTab === 'odds'
                   ? 'bg-slate-800 text-emerald-400 border border-slate-700/80 shadow-sm'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
@@ -82,7 +82,7 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
             <button
               onClick={() => setActiveTab('simulator')}
-              className={`px-3 lg:px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+              className={`px-2.5 lg:px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap flex items-center gap-1.5 ${
                 activeTab === 'simulator'
                   ? 'bg-slate-800 text-emerald-400 border border-slate-700/80 shadow-sm'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
@@ -93,13 +93,24 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
             <button
               onClick={() => setActiveTab('matches')}
-              className={`px-3 lg:px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+              className={`px-2.5 lg:px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
                 activeTab === 'matches'
                   ? 'bg-slate-800 text-emerald-400 border border-slate-700/80 shadow-sm'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
               }`}
             >
               Archivio Gare
+            </button>
+            <button
+              onClick={() => setActiveTab('guide')}
+              className={`px-2.5 lg:px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+                activeTab === 'guide'
+                  ? 'bg-slate-800 text-emerald-400 border border-slate-700/80 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
+              }`}
+            >
+              <BookOpen className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Guida Metriche</span>
             </button>
           </nav>
 
@@ -160,7 +171,7 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Proportional, Non-Scrolling Centered Navigation Bar for Mobile / Smaller Screens (< md) */}
         <div className="md:hidden py-1.5 border-t border-slate-800/80">
-          <div className="grid grid-cols-5 gap-1 text-center font-mono text-[11px] w-full">
+          <div className="grid grid-cols-6 gap-1 text-center font-mono text-[10px] sm:text-[11px] w-full">
             <button
               onClick={() => setActiveTab('standings')}
               className={`py-1.5 px-0.5 rounded transition-colors truncate ${
@@ -210,6 +221,16 @@ export const Header: React.FC<HeaderProps> = ({
               }`}
             >
               Gare
+            </button>
+            <button
+              onClick={() => setActiveTab('guide')}
+              className={`py-1.5 px-0.5 rounded transition-colors truncate ${
+                activeTab === 'guide'
+                  ? 'bg-slate-800 text-emerald-400 font-bold border border-slate-700'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/50'
+              }`}
+            >
+              Guida
             </button>
           </div>
         </div>

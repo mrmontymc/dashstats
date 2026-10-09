@@ -11,6 +11,7 @@ import { PredictiveSection } from './components/PredictiveSection';
 import { OddsAnalyticsSection } from './components/OddsAnalyticsSection';
 import { MatchSimulatorView } from './components/MatchSimulatorView';
 import { MatchTableView } from './components/MatchTableView';
+import { MetricsGuideView } from './components/MetricsGuideView';
 import { TeamDetailModal } from './components/TeamDetailModal';
 import { CsvUploadModal } from './components/CsvUploadModal';
 import { AnalysisConfigModal } from './components/AnalysisConfigModal';
@@ -24,8 +25,8 @@ export default function App() {
   const [matches, setMatches] = useState<Match[]>(() => getSampleSerieAMatches());
   const [datasetName, setDatasetName] = useState<string>('Serie A TIM 2023/24');
 
-  // Navigazione schede (dashboard rimossa)
-  const [activeTab, setActiveTab] = useState<'standings' | 'predictions' | 'odds' | 'simulator' | 'matches'>('standings');
+  // Navigazione schede (dashboard rimossa, aggiunta guida metodologica alle metriche)
+  const [activeTab, setActiveTab] = useState<'standings' | 'predictions' | 'odds' | 'simulator' | 'matches' | 'guide'>('standings');
 
   // Stato filtri real-time
   const [filters, setFilters] = useState<FilterState>({
@@ -325,13 +326,15 @@ export default function App() {
           onOpenConfig={() => setIsConfigModalOpen(true)}
         />
 
-        {/* Dynamic Metric Cards */}
-        <MetricCards
-          matches={filteredMatches}
-          selectedTeam={activeTeam}
-          teamStats={activeTeamStats}
-          venue={filters.venue}
-        />
+        {/* Dynamic Metric Cards (nascosti nella guida metodologica per massimizzare la leggibilità) */}
+        {activeTab !== 'guide' && (
+          <MetricCards
+            matches={filteredMatches}
+            selectedTeam={activeTeam}
+            teamStats={activeTeamStats}
+            venue={filters.venue}
+          />
+        )}
 
         {/* View Routing */}
         {activeTab === 'standings' && (
@@ -382,6 +385,7 @@ export default function App() {
             matches={filteredMatches.length >= 6 ? filteredMatches : matches}
             standings={filteredStandings.length >= 2 ? filteredStandings : overallStandings}
             config={analysisConfig}
+            allMatches={matches}
           />
         )}
 
@@ -390,6 +394,10 @@ export default function App() {
             matches={filteredMatches}
             onSelectTeam={handleOpenTeamModal}
           />
+        )}
+
+        {activeTab === 'guide' && (
+          <MetricsGuideView />
         )}
       </main>
 

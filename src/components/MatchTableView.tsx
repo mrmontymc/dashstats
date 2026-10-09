@@ -56,6 +56,7 @@ export const MatchTableView: React.FC<MatchTableViewProps> = ({
               <th className="py-2.5 px-3 text-center min-w-[70px]">Risultato</th>
               <th className="py-2.5 px-3 text-left min-w-[130px]">Squadra Trasferta</th>
               <th className="py-2.5 px-2.5 text-center">Tiri (In Porta)</th>
+              <th className="py-2.5 px-2.5 text-center">Corner</th>
               <th className="py-2.5 px-2.5 text-center">xG</th>
               <th className="py-2.5 px-2.5 text-center">Possesso</th>
               <th className="py-2.5 px-2.5 text-center">Quote 1-X-2</th>
@@ -67,7 +68,7 @@ export const MatchTableView: React.FC<MatchTableViewProps> = ({
           <tbody className="divide-y divide-slate-800/60 font-mono">
             {currentMatches.length === 0 ? (
               <tr>
-                <td colSpan={12} className="py-8 text-center text-slate-500 font-sans text-xs">
+                <td colSpan={13} className="py-8 text-center text-slate-500 font-sans text-xs">
                   Nessuna partita corrisponde ai criteri di filtro correnti.
                 </td>
               </tr>
@@ -76,6 +77,9 @@ export const MatchTableView: React.FC<MatchTableViewProps> = ({
                 const isHomeWin = m.homeGoals > m.awayGoals;
                 const isAwayWin = m.awayGoals > m.homeGoals;
                 const isDraw = m.homeGoals === m.awayGoals;
+                const totalCorners = (m.homeCorners !== undefined && m.awayCorners !== undefined)
+                  ? m.homeCorners + m.awayCorners
+                  : undefined;
 
                 return (
                   <tr key={m.id} className="hover:bg-slate-800/40 transition-colors">
@@ -114,6 +118,16 @@ export const MatchTableView: React.FC<MatchTableViewProps> = ({
                       {m.homeShots !== undefined && m.awayShots !== undefined ? (
                         <span>
                           {m.homeShots} ({m.homeShotsTarget ?? '-'}) - {m.awayShots} ({m.awayShotsTarget ?? '-'})
+                        </span>
+                      ) : (
+                        <span className="text-slate-600">-</span>
+                      )}
+                    </td>
+                    <td className="py-2 px-2.5 text-center tabular-nums">
+                      {m.homeCorners !== undefined && m.awayCorners !== undefined ? (
+                        <span className="inline-flex items-center gap-1">
+                          <span className="text-purple-400 font-semibold">{m.homeCorners} - {m.awayCorners}</span>
+                          <span className="text-[10px] text-slate-500">({totalCorners})</span>
                         </span>
                       ) : (
                         <span className="text-slate-600">-</span>

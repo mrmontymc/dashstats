@@ -43,9 +43,9 @@ export const PredictiveSection: React.FC<PredictiveSectionProps> = ({
   const [activeTab, setActiveTab] = useState<'momentum' | 'projections' | 'regression' | 'archetypes' | 'elo'>('momentum');
   const [monteCarloMetric, setMonteCarloMetric] = useState<'points' | 'goals' | 'corners' | 'all'>('points');
 
-  // Calcola profili predittivi iterando su tutti i dati
+  // Calcola profili predittivi iterando sui 50 record più recenti per ciascuna squadra
   const profiles = React.useMemo(() => {
-    return computePredictiveProfiles(matches, standings, config);
+    return computePredictiveProfiles(matches, standings, config, 50);
   }, [matches, standings, config]);
 
   const profilesMap = React.useMemo(() => {

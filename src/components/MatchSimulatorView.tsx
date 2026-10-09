@@ -12,11 +12,17 @@ import {
   OddsBracketAnalysis,
   CornerMarketStats,
   ProfitableMarketPattern,
+  MonteCarloSimulationResult,
+  ScrapedMatchItem,
+  ScrapedMatchStatEvaluation,
+  ExcludedScrapedMatch,
 } from '../types/football';
 import {
   computePredictiveProfiles,
   computeLeagueMetrics,
   simulateMatch,
+  simulateMatchMonteCarlo,
+  computeTeamStats,
 } from '../utils/predictiveEngine';
 import {
   analyzeHistoricalMatchesWithOdds,
@@ -27,6 +33,15 @@ import {
   computeStatisticalCorrelations,
   computeCornerMarketStats,
 } from '../utils/oddsAnalyticsEngine';
+import {
+  SISAL_PDF_FLYER_URL,
+  scrapeOddsFromSportsbook,
+  evaluateScrapedMatchesWithStats,
+  filterMatchesWithDatabaseHistory,
+  parseSportsbookUploadedFile,
+  PRESET_SPORTSBOOK_FEEDS,
+} from '../utils/oddsScraperEngine';
+import { getSampleLaLigaMatches, getSamplePremierLeagueMatches } from '../data/sampleDataset';
 import {
   Swords,
   Dices,
@@ -53,22 +68,75 @@ import {
   Info,
   Scale,
   Zap,
+  Globe,
+  Link,
+  DownloadCloud,
+  UploadCloud,
+  FileDown,
+  ExternalLink,
+  FileText,
+  Flame,
+  Search,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface MatchSimulatorViewProps {
   matches: Match[];
   standings: TeamStats[];
   config?: AnalysisConfig;
+  allMatches?: Match[]; // Intero database storico a disposizione per l'analisi quote
 }
 
 export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
   matches,
   standings,
   config,
+  allMatches,
 }) => {
-  const teams = standings.map((s) => s.team);
-  const [homeTeam, setHomeTeam] = useState<string>(teams[0] || '');
-  const [awayTeam, setAwayTeam] = useState<string>(teams[1] || teams[0] || '');
+  // Web Scraping Quote Online & Palinsesto Bookmaker (Default: Volantino Ufficiale Sisal Matchpoint PDF)
+  const [scrapingUrl, setScrapingUrl] = useState<string>(SISAL_PDF_FLYER_URL);
+  const [isScraping, setIsScraping] = useState<boolean>(false);
+  const [isUploadingFile, setIsUploadingFile] = useState<boolean>(false);
+  const [scrapedFeedInfo, setScrapedFeedInfo] = useState<{ bookmaker: string; competition: string; note: string } | null>(null);
+  const [scrapedMatches, setScrapedMatches] = useState<ScrapedMatchItem[]>([]);
+  const [showRawPasteInput, setShowRawPasteInput] = useState<boolean>(false);
+  const [rawPastedText, setRawPastedText] = useState<string>('');
+  const [scrapedFilterCategory, setScrapedFilterCategory] = useState<'all' | 'value' | 'over_under' | 'draws' | 'excluded'>('all');
+  const [isScraperPanelOpen, setIsScraperPanelOpen] = useState<boolean>(true);
+
+  // Database completo per analisi quote e correlazioni di mercato:
+  // integra sempre la copertura multileague (Serie A, Premier League, La Liga spagnola) per supportare qualsiasi URL o volantino bookmaker
+  const fullDatabase = useMemo(() => {
+    const base = allMatches && allMatches.length > 0 ? allMatches : matches;
+    const hasLiga = base.some((m) => m.competition?.includes('Liga'));
+    const hasPL = base.some((m) => m.competition?.includes('Premier'));
+    let combined = base;
+    if (!hasLiga) {
+      combined = [...combined, ...getSampleLaLigaMatches()];
+    }
+    if (!hasPL) {
+      combined = [...combined, ...getSamplePremierLeagueMatches()];
+    }
+    return combined;
+  }, [allMatches, matches]);
+
+  // Squadre disponibili: unione tra classifica, database storico e palinsesto quote caricato
+  const teams = useMemo(() => {
+    const set = new Set<string>();
+    standings.forEach((s) => set.add(s.team));
+    fullDatabase.forEach((m) => {
+      set.add(m.homeTeam);
+      set.add(m.awayTeam);
+    });
+    scrapedMatches.forEach((m) => {
+      set.add(m.homeTeam);
+      set.add(m.awayTeam);
+    });
+    return Array.from(set).sort();
+  }, [standings, fullDatabase, scrapedMatches]);
+
+  const [homeTeam, setHomeTeam] = useState<string>(() => teams[0] || 'Inter');
+  const [awayTeam, setAwayTeam] = useState<string>(() => teams[1] || teams[0] || 'Milan');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
 
   // Input quote offerte dal bookmaker per questo specifico match
@@ -83,16 +151,129 @@ export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
     sourceName: 'Bookmaker',
   });
 
-  // Modalità di tolleranza per ricerca storico quote
+  // Modalità di tolleranza per ricerca storico quote (richiede almeno 2 esiti concordi)
   const [toleranceMode, setToleranceMode] = useState<'tight' | 'standard' | 'wide' | 'bracket'>('standard');
+  // Mercati inclusi nella verifica quote e vincolo tolleranza (1X2 è base obbligatoria, O/U e GG/NG opzionali)
+  const [includeOverUnderInOddsCheck, setIncludeOverUnderInOddsCheck] = useState<boolean>(false);
+  const [includeGoalNoGoalInOddsCheck, setIncludeGoalNoGoalInOddsCheck] = useState<boolean>(false);
+
+  // Metodo di simulazione: Poisson Bivariato (Dixon-Coles) vs Simulazione Monte Carlo Stocastica
+  const [simulationMethod, setSimulationMethod] = useState<'poisson' | 'montecarlo'>('poisson');
+  const [monteCarloRuns, setMonteCarloRuns] = useState<number>(10000);
+  const [monteCarloSeed, setMonteCarloSeed] = useState<number>(1);
+
   const [showHistoricalList, setShowHistoricalList] = useState<boolean>(false);
   const [paramsSubTab, setParamsSubTab] = useState<'all' | 'novig' | 'brackets' | 'conditionals' | 'patterns' | 'correlations'>('all');
   const [showCornerLab, setShowCornerLab] = useState<boolean>(true);
 
-  const league = computeLeagueMetrics(matches);
+  // Azione di recupero quote via URL (Web Scraping Sisal PDF o altri bookmaker)
+  const handleScrapeOdds = async (targetUrlToScrape?: string) => {
+    const url = targetUrlToScrape || scrapingUrl;
+    setIsScraping(true);
+    try {
+      const res = await scrapeOddsFromSportsbook(url, rawPastedText);
+      if (res.success) {
+        setScrapedMatches(res.matches);
+        setScrapedFeedInfo({
+          bookmaker: res.bookmaker,
+          competition: res.competition,
+          note: res.sourceNote,
+        });
+      }
+    } catch (err) {
+      console.error('Errore durante web scraping:', err);
+    } finally {
+      setIsScraping(false);
+    }
+  };
+
+  // Caricamento file PDF o TXT locale caricato dall'utente
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingFile(true);
+    try {
+      const res = await parseSportsbookUploadedFile(file);
+      if (res.matches.length > 0) {
+        setScrapedMatches(res.matches);
+        setScrapedFeedInfo({
+          bookmaker: res.bookmaker,
+          competition: 'Volantino Sisal (File Caricato)',
+          note: res.note,
+        });
+      }
+    } catch (err) {
+      console.error('Errore durante caricamento file:', err);
+    } finally {
+      setIsUploadingFile(false);
+    }
+  };
+
+  // Caricamento iniziale automatico con il Volantino Sisal Quote Calcio Base (PDF)
+  useEffect(() => {
+    handleScrapeOdds(SISAL_PDF_FLYER_URL);
+  }, []);
+
+  // FILTRO FONDAMENTALE E SCREENING STATISTICO:
+  // Analizza il file ed estrae le partite di cui è presente uno storico in database.
+  // Tutte le valutazioni precedenti (+EV, Fair Odds, Poisson, Anomalie O/U, Correlazioni)
+  // vengono effettuate esclusivamente su queste partite filtrate!
+  const dbFilterResult = useMemo(() => {
+    if (scrapedMatches.length === 0) {
+      return {
+        matchedEvaluations: [] as ScrapedMatchStatEvaluation[],
+        excludedMatches: [] as ExcludedScrapedMatch[],
+        stats: { totalScraped: 0, matchedCount: 0, excludedCount: 0 },
+      };
+    }
+    return filterMatchesWithDatabaseHistory(scrapedMatches, fullDatabase, config);
+  }, [scrapedMatches, fullDatabase, config]);
+
+  const scrapedEvaluations = dbFilterResult.matchedEvaluations;
+  const excludedMatches = dbFilterResult.excludedMatches;
+
+  const filteredScrapedEvaluations = useMemo(() => {
+    if (scrapedFilterCategory === 'all') return scrapedEvaluations;
+    if (scrapedFilterCategory === 'value') {
+      return scrapedEvaluations.filter((e) => e.bestValueEvPct >= 4.0 || e.primaryHighlight.tag === 'value_bet');
+    }
+    if (scrapedFilterCategory === 'over_under') {
+      return scrapedEvaluations.filter((e) => e.primaryHighlight.tag === 'over_under_anomaly' || e.primaryHighlight.tag === 'defensive_lock');
+    }
+    if (scrapedFilterCategory === 'draws') {
+      return scrapedEvaluations.filter((e) => e.primaryHighlight.tag === 'draw_bias');
+    }
+    return scrapedEvaluations;
+  }, [scrapedEvaluations, scrapedFilterCategory]);
+
+  // Seleziona una partita tra quelle caricate con evidenze statistiche per approfondirla nel dettaglio
+  const handleSelectScrapedMatch = (evalItem: ScrapedMatchStatEvaluation) => {
+    const m = evalItem.match;
+    setHomeTeam(m.homeTeam);
+    setAwayTeam(m.awayTeam);
+    setCustomOdds({
+      homeOdds: m.homeOdds,
+      drawOdds: m.drawOdds,
+      awayOdds: m.awayOdds,
+      over25Odds: m.over25Odds,
+      under25Odds: m.under25Odds,
+      bttsYesOdds: m.bttsYesOdds,
+      bttsNoOdds: m.bttsNoOdds,
+      sourceName: `${m.sourceBookmaker} (@${m.homeOdds} / @${m.drawOdds} / @${m.awayOdds})`,
+    });
+
+    const simElement = document.getElementById('match-simulator-engine-section');
+    if (simElement) {
+      simElement.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
+  const league = computeLeagueMetrics(fullDatabase);
+
+  // Calcolo profili predittivi considerando esattamente i 50 record più recenti per ogni team
   const profiles = useMemo(
-    () => computePredictiveProfiles(matches, standings, config),
-    [matches, standings, config]
+    () => computePredictiveProfiles(fullDatabase, standings, config, 50),
+    [fullDatabase, standings, config]
   );
   const profilesMap = useMemo(() => {
     const map = new Map<string, TeamPredictiveProfile>();
@@ -108,7 +289,8 @@ export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
     }
   }, [teams]);
 
-  const simulation = useMemo(() => {
+  // Simulazione analitica classica Poisson Dixon-Coles
+  const poissonSimulation = useMemo(() => {
     if (!homeTeam || !awayTeam || homeTeam === awayTeam) return null;
     return simulateMatch(
       homeTeam,
@@ -119,6 +301,26 @@ export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
       config
     );
   }, [homeTeam, awayTeam, profilesMap, league, config]);
+
+  // Alternativa di simulazione stocastica Monte Carlo (esegue N iterazioni indipendenti)
+  const monteCarloSimulation = useMemo(() => {
+    if (!homeTeam || !awayTeam || homeTeam === awayTeam) return null;
+    if (monteCarloSeed < 0) return null;
+    return simulateMatchMonteCarlo(
+      homeTeam,
+      awayTeam,
+      profilesMap,
+      league.avgHomeGoals,
+      league.avgAwayGoals,
+      monteCarloRuns,
+      config
+    );
+  }, [homeTeam, awayTeam, profilesMap, league, config, monteCarloRuns, monteCarloSeed]);
+
+  // Modello attivo in base alla selezione dell'utente (Poisson o Monte Carlo)
+  const simulation = simulationMethod === 'montecarlo'
+    ? (monteCarloSimulation || poissonSimulation)
+    : poissonSimulation;
 
   // Storico scontri diretti presenti nel dataset
   const headToHeadMatches = useMemo(() => {
@@ -270,8 +472,10 @@ export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
       tipPhrase: string;
     }> = [];
 
+    // Verifica quote con calcolo EV% e filtro rigoroso per quota utile >= 1.30
     const checkBet = (market: string, userOdd: number | undefined, prob: number) => {
-      if (!userOdd || userOdd <= 1 || prob <= 0) return;
+      // Regola vincolante: esclusione di quote < 1.30 (non remunerative per la gestione del valore atteso)
+      if (!userOdd || userOdd < 1.30 || prob <= 0) return;
       const fair = Number((100 / prob).toFixed(2));
       const edge = Number(((userOdd / fair - 1) * 100).toFixed(1));
       const ev = Number((((prob / 100) * userOdd - 1) * 100).toFixed(1));
@@ -321,38 +525,120 @@ export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
     return null;
   }, [customOdds.homeOdds, customOdds.drawOdds, customOdds.awayOdds, simulation]);
 
-  // 2. Analisi Fascia di Quota (Odds Bracket Analysis)
+  // 2. Analisi Fascia di Quota (Odds Bracket Analysis su intero database)
   const bracketData = useMemo(() => {
-    const brackets: OddsBracketAnalysis[] = computeOddsBrackets(matches, '1', config?.flatStake ?? 100);
+    const brackets: OddsBracketAnalysis[] = computeOddsBrackets(fullDatabase, '1', config?.flatStake ?? 100);
     const effectiveHomeOdd = customOdds.homeOdds || (simulation ? Number(((100 / simulation.homeWinProb) * 0.945).toFixed(2)) : 2.0);
     return brackets.find((b: OddsBracketAnalysis) => effectiveHomeOdd >= b.minOdds && effectiveHomeOdd <= b.maxOdds) || brackets[0];
-  }, [matches, customOdds.homeOdds, simulation, config]);
+  }, [fullDatabase, customOdds.homeOdds, simulation, config]);
 
-  // 3. Probabilità Condizionate registrate per mercati correlati
-  const conditionalProbs = useMemo(() => {
-    return computeMarketConditionalProbabilities(matches);
-  }, [matches]);
+  // 3. Probabilità Condizionate registrate per mercati correlati filtrate SOLO per lo scenario coerente con le quote del match selezionato
+  const coherentConditionalProbs = useMemo(() => {
+    const raw = computeMarketConditionalProbabilities(fullDatabase);
+    const effHome = customOdds.homeOdds || (simulation ? Number(((100 / simulation.homeWinProb) * 0.95).toFixed(2)) : 2.0);
+    const effDraw = customOdds.drawOdds || (simulation ? Number(((100 / simulation.drawProb) * 0.95).toFixed(2)) : 3.4);
+    const effAway = customOdds.awayOdds || (simulation ? Number(((100 / simulation.awayWinProb) * 0.95).toFixed(2)) : 3.6);
+    const effOver = customOdds.over25Odds || (simulation ? Number(((100 / simulation.over25Prob) * 0.95).toFixed(2)) : 1.9);
+    const effUnder = customOdds.under25Odds || (simulation ? Number(((100 / (100 - simulation.over25Prob)) * 0.95).toFixed(2)) : 1.9);
 
-  // 4. Correlazioni empiriche tra statistiche e quote
-  const statisticalCorrelations = useMemo(() => {
-    return computeStatisticalCorrelations(matches);
-  }, [matches]);
-
-  // 5. Statistiche campionarie corner della lega
-  const cornerMarketStats = useMemo(() => {
-    return computeCornerMarketStats(matches, teams);
-  }, [matches, teams]);
-
-  // 6. Pattern Profittevoli registrati nel database applicabili a questo match
-  const applicablePatterns = useMemo(() => {
-    const patterns = findProfitableMarketPatterns(matches, teams, config);
-    return patterns.filter((p: ProfitableMarketPattern) => {
-      if (p.teamScope && p.teamScope !== homeTeam && p.teamScope !== awayTeam) return false;
+    return raw.filter((cp) => {
+      // P(Over 2.5 | 1) o P(BTTS | 1): solo se lo scenario quota Casa è favorito o competitivo
+      if (cp.id === 'p_over_given_home' || cp.id === 'p_btts_given_home') {
+        return effHome <= 2.50 || effHome < effAway || (simulation && simulation.homeWinProb >= 38);
+      }
+      // P(Over 2.5 | 2) o P(BTTS | 2): solo se lo scenario quota Ospite è favorito o competitivo
+      if (cp.id === 'p_over_given_away' || cp.id === 'p_btts_given_away') {
+        return effAway <= 2.65 || effAway < effHome || (simulation && simulation.awayWinProb >= 35);
+      }
+      // P(BTTS | X): solo se il pareggio è uno scenario plausibile con quote equilibrate
+      if (cp.id === 'p_btts_given_draw') {
+        return effDraw <= 3.35 || Math.abs(effHome - effAway) < 0.75 || (simulation && simulation.drawProb >= 28);
+      }
+      // P(Under 2.5 | No Goal): solo se il mercato quota un match tendente a basso punteggio
+      if (cp.id === 'p_under_given_btts_no') {
+        return effUnder <= 1.95 || (simulation && simulation.over25Prob < 52);
+      }
+      // P(BTTS | Over 2.5): solo se lo scenario quote Over 2.5 è attivo/probabile
+      if (cp.id === 'p_btts_given_over') {
+        return effOver <= 1.95 || (simulation && simulation.over25Prob >= 48);
+      }
       return true;
-    }).slice(0, 4);
-  }, [matches, teams, config, homeTeam, awayTeam]);
+    });
+  }, [fullDatabase, customOdds, simulation]);
+
+  // 4. Correlazioni empiriche tra statistiche e quote filtrate per compatibilità con il match selezionato
+  const coherentStatisticalCorrelations = useMemo(() => {
+    const raw = computeStatisticalCorrelations(fullDatabase);
+    const effOver = customOdds.over25Odds || (simulation ? Number(((100 / simulation.over25Prob) * 0.95).toFixed(2)) : 1.9);
+    const effHome = customOdds.homeOdds || (simulation ? Number(((100 / simulation.homeWinProb) * 0.95).toFixed(2)) : 2.0);
+
+    return raw.filter((sc) => {
+      if (sc.id === 'xg_vs_goals') return true; // Sempre rilevante per determinare il divario 1X2
+      if (sc.id === 'tot_xg_vs_tot_goals') return effOver <= 2.10; // Rilevante per mercati gol totali
+      if (sc.id === 'shots_target_vs_goals') return true;
+      if (sc.id === 'shots_vs_corners') return showCornerLab || !!customOdds.cornerOver95Odds;
+      if (sc.id === 'fouls_vs_cards') return false; // Nascondi se non rilevante per il pronostico selezionato
+      if (sc.id === 'possession_vs_allowed_shots') return effHome <= 2.0; // Solo con squadra dominante in casa
+      return true;
+    });
+  }, [fullDatabase, customOdds, simulation, showCornerLab]);
+
+  // 5. Statistiche campionarie corner della lega su tutto il DB
+  const cornerMarketStats = useMemo(() => {
+    return computeCornerMarketStats(fullDatabase, teams);
+  }, [fullDatabase, teams]);
+
+  // 6. Pattern Profittevoli registrati nel database rigorosamente COERENTI e COMPATIBILI con le quote e la partita selezionata
+  const applicablePatterns = useMemo(() => {
+    const patterns = findProfitableMarketPatterns(fullDatabase, teams, config);
+    const effHome = customOdds.homeOdds || (simulation ? Number(((100 / simulation.homeWinProb) * 0.95).toFixed(2)) : 2.0);
+    const effDraw = customOdds.drawOdds || (simulation ? Number(((100 / simulation.drawProb) * 0.95).toFixed(2)) : 3.4);
+    const effAway = customOdds.awayOdds || (simulation ? Number(((100 / simulation.awayWinProb) * 0.95).toFixed(2)) : 3.6);
+    const effOver = customOdds.over25Odds || (simulation ? Number(((100 / simulation.over25Prob) * 0.95).toFixed(2)) : 1.9);
+    const effUnder = customOdds.under25Odds || (simulation ? Number(((100 / (100 - simulation.over25Prob)) * 0.95).toFixed(2)) : 1.9);
+    const effBtts = customOdds.bttsYesOdds || (simulation ? Number(((100 / simulation.bothTeamsScoreProb) * 0.95).toFixed(2)) : 1.85);
+
+    return patterns.filter((p: ProfitableMarketPattern) => {
+      // Se il pattern è legato a una squadra specifica, deve riguardare esattamente una delle due squadre nel suo ruolo
+      if (p.teamScope) {
+        if (p.id.includes('home') && p.teamScope !== homeTeam) return false;
+        if (p.id.includes('away') && p.teamScope !== awayTeam) return false;
+        if (p.teamScope !== homeTeam && p.teamScope !== awayTeam) return false;
+        return true;
+      }
+
+      // Se è un pattern basato su fascia di quote (bracket), la quota ATTUALE del match deve rientrare nel range della fascia!
+      const parts = p.id.split('_');
+      if (parts[0] === 'pattern' && parts[1] === 'bracket') {
+        const mkt = parts[2];
+        const minOdd = parseFloat(parts[3]);
+        const maxOdd = parseFloat(parts[4]);
+
+        if (isNaN(minOdd) || isNaN(maxOdd)) return false;
+
+        let activeOdd = 0;
+        if (mkt === '1') activeOdd = effHome;
+        else if (mkt === 'X') activeOdd = effDraw;
+        else if (mkt === '2') activeOdd = effAway;
+        else if (mkt === 'Over25') activeOdd = effOver;
+        else if (mkt === 'Under25') activeOdd = effUnder;
+        else if (mkt === 'BTTS' || mkt === 'BTTS_Yes') activeOdd = effBtts;
+        else if (mkt === 'CornerOver95') {
+          activeOdd = customOdds.cornerOver95Odds || 1.85;
+        }
+
+        // Verifica che la quota del match rientri nella fascia di tolleranza di questo pattern (+/- 0.05)
+        const isInRange = activeOdd >= (minOdd - 0.05) && activeOdd <= (maxOdd + 0.05);
+        return isInRange;
+      }
+
+      return false;
+    }).slice(0, 6);
+  }, [fullDatabase, teams, config, homeTeam, awayTeam, customOdds, simulation]);
 
   // Calcolo della verifica storico risultati nel dataset in base alle quote inserite
+  // Considera TUTTO il DB a disposizione con confronto base sul mercato 1X2 (coppie di tolleranza verificate in 1, X, 2)
+  // Include opzionalmente i mercati Under/Over 2.5 e Goal/No Goal se attivati dall'utente
   const historicalOddsStats = useMemo(() => {
     const effectiveOdds: MatchCustomOdds = {
       homeOdds:
@@ -375,17 +661,33 @@ export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
         (simulation ? Number(((100 / simulation.bothTeamsScoreProb) * 0.95).toFixed(2)) : 1.85),
     };
     return analyzeHistoricalMatchesWithOdds(
-      matches,
+      fullDatabase,
       effectiveOdds,
       toleranceMode,
-      config?.flatStake ?? 100
+      config?.flatStake ?? 100,
+      {
+        includeOverUnder: includeOverUnderInOddsCheck,
+        includeGoalNoGoal: includeGoalNoGoalInOddsCheck,
+      }
     );
-  }, [matches, customOdds, simulation, toleranceMode, config]);
+  }, [
+    fullDatabase,
+    customOdds,
+    simulation,
+    toleranceMode,
+    config,
+    includeOverUnderInOddsCheck,
+    includeGoalNoGoalInOddsCheck,
+  ]);
 
+  // Offerta Completa Pronostici: esclude tassativamente le selezioni con quota utile < 1.30
   const filteredAdviceList = useMemo(() => {
     if (!simulation) return [];
-    if (categoryFilter === 'all') return simulation.bettingAdviceList;
-    return simulation.bettingAdviceList.filter((t) => t.category === categoryFilter);
+    const validTips = simulation.bettingAdviceList.filter(
+      (t) => (t.referenceMinOdds ?? 0) >= 1.30 && (t.fairOdds ?? 0) >= 1.30
+    );
+    if (categoryFilter === 'all') return validTips;
+    return validTips.filter((t) => t.category === categoryFilter);
   }, [simulation, categoryFilter]);
 
   if (teams.length < 2) {
@@ -404,8 +706,518 @@ export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* 1. SEZIONE CARICAMENTO QUOTE AGGIORNATE DA VOLANTINO SISAL (PDF) E FILTRO STORICO DATABASE */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+              <FileText className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-sm font-bold text-white tracking-tight">
+                  Caricamento Quote Aggiornate · Volantino Ufficiale Sisal (PDF)
+                </h3>
+                <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-800 font-mono font-semibold">
+                  Sisal Matchpoint · PDF
+                </span>
+                <span className="px-2 py-0.5 rounded text-[10px] bg-sky-950 text-sky-300 border border-sky-800 font-mono">
+                  Confronto con Database Storico
+                </span>
+              </div>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Quote aggiornate dal volantino ufficiale Sisal (<strong>calcio base per manifestazione.pdf</strong>). Vengono estratte ed elaborate solo le partite di cui è presente uno storico in database: tutte le valutazioni analitiche (+EV, Fair Odds, Poisson, Correlazioni) sono calcolate su queste partite filtrate.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setIsScraperPanelOpen(!isScraperPanelOpen)}
+            className="text-xs font-mono text-slate-400 hover:text-slate-200 flex items-center gap-1 self-start sm:self-auto transition-colors cursor-pointer"
+          >
+            <span>{isScraperPanelOpen ? 'Comprimi' : 'Espandi'}</span>
+            {isScraperPanelOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          </button>
+        </div>
+
+        {isScraperPanelOpen && (
+          <div className="space-y-4">
+            {/* Input URL e Bottoni di Caricamento (Link Sisal PDF, Upload File PDF/TXT, Link Esterno) */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-mono text-slate-300">
+                  URL VOLANTINO QUOTE SISAL MATCHPOINT (PDF)
+                </label>
+                <span className="text-[11px] text-slate-500 font-mono">
+                  Default: Volantino Ufficiale Sisal Calcio Base
+                </span>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-stretch gap-2">
+                <div className="relative flex-1">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
+                    <Link className="w-4 h-4" />
+                  </div>
+                  <input
+                    type="url"
+                    value={scrapingUrl}
+                    onChange={(e) => setScrapingUrl(e.target.value)}
+                    placeholder={SISAL_PDF_FLYER_URL}
+                    className="w-full pl-9 pr-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 font-mono transition-colors"
+                  />
+                </div>
+
+                {/* Bottone 1: Estrazione dal link Volantino Sisal PDF */}
+                <button
+                  type="button"
+                  disabled={isScraping}
+                  onClick={() => handleScrapeOdds()}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 text-white font-medium text-xs rounded-lg flex items-center justify-center gap-2 transition-all shadow-md shrink-0 cursor-pointer disabled:cursor-not-allowed"
+                >
+                  {isScraping ? (
+                    <>
+                      <RotateCcw className="w-3.5 h-3.5 animate-spin text-white" />
+                      <span>Analisi PDF in corso...</span>
+                    </>
+                  ) : (
+                    <>
+                      <DownloadCloud className="w-4 h-4" />
+                      <span>Aggiorna Quote da Volantino (PDF)</span>
+                    </>
+                  )}
+                </button>
+
+                {/* Bottone 2: Carica file PDF scaricato */}
+                <label
+                  htmlFor="sisal-pdf-file-upload"
+                  className="px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-slate-200 hover:text-white font-medium text-xs rounded-lg flex items-center justify-center gap-2 transition-all shrink-0 cursor-pointer"
+                  title="Carica il file PDF scaricato dal tuo computer"
+                >
+                  <UploadCloud className="w-4 h-4 text-emerald-400" />
+                  <span>{isUploadingFile ? 'Caricamento...' : 'Carica File PDF / TXT'}</span>
+                  <input
+                    id="sisal-pdf-file-upload"
+                    type="file"
+                    accept=".pdf,.txt,.csv"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
+                </label>
+
+                {/* Bottone 3: Apri PDF Ufficiale Sisal in nuova scheda */}
+                <a
+                  href={SISAL_PDF_FLYER_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-2 bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-400 hover:text-slate-200 text-xs rounded-lg flex items-center justify-center gap-1.5 transition-colors shrink-0"
+                  title="Apri il volantino ufficiale Sisal in una nuova scheda"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span className="hidden lg:inline">Apri PDF Sisal</span>
+                </a>
+              </div>
+
+              {/* Preset link rapidi e Incolla Testo */}
+              <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
+                <span className="text-[11px] font-mono text-slate-400">Preset rapidi:</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setScrapingUrl(SISAL_PDF_FLYER_URL);
+                    handleScrapeOdds(SISAL_PDF_FLYER_URL);
+                  }}
+                  className={`px-2.5 py-1 rounded text-[11px] transition-colors flex items-center gap-1 font-mono cursor-pointer border ${
+                    scrapingUrl === SISAL_PDF_FLYER_URL
+                      ? 'bg-emerald-950 text-emerald-300 border-emerald-600 font-semibold'
+                      : 'bg-slate-950 hover:bg-slate-800 border-slate-700 text-slate-300'
+                  }`}
+                >
+                  <span>📄 Volantino Sisal Ufficiale (PDF)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setScrapingUrl('https://www.snai.it/scommesse/quote/calcio/spagna/liga');
+                    handleScrapeOdds('https://www.snai.it/scommesse/quote/calcio/spagna/liga');
+                  }}
+                  className="px-2 py-1 bg-slate-950 hover:bg-slate-800 border border-slate-700 hover:border-sky-500 rounded text-[11px] text-slate-300 hover:text-white transition-colors flex items-center gap-1 font-mono cursor-pointer"
+                >
+                  <span>🇪🇸 SNAI La Liga</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setScrapingUrl('https://www.snai.it/scommesse/quote/calcio/italia/serie-a');
+                    handleScrapeOdds('https://www.snai.it/scommesse/quote/calcio/italia/serie-a');
+                  }}
+                  className="px-2 py-1 bg-slate-950 hover:bg-slate-800 border border-slate-700 hover:border-emerald-500 rounded text-[11px] text-slate-300 hover:text-white transition-colors flex items-center gap-1 font-mono cursor-pointer"
+                >
+                  <span>🇮🇹 SNAI Serie A</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setScrapingUrl('https://www.snai.it/scommesse/quote/calcio/inghilterra/premier-league');
+                    handleScrapeOdds('https://www.snai.it/scommesse/quote/calcio/inghilterra/premier-league');
+                  }}
+                  className="px-2 py-1 bg-slate-950 hover:bg-slate-800 border border-slate-700 hover:border-purple-500 rounded text-[11px] text-slate-300 hover:text-white transition-colors flex items-center gap-1 font-mono cursor-pointer"
+                >
+                  <span>🇬🇧 SNAI Premier League</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowRawPasteInput(!showRawPasteInput)}
+                  className="text-[11px] text-slate-400 hover:text-slate-200 underline decoration-dotted ml-auto transition-colors cursor-pointer"
+                >
+                  {showRawPasteInput ? 'Chiudi Incolla Testo' : 'Incolla Testo / Estratto dal PDF'}
+                </button>
+              </div>
+
+              {/* Area facoltativa per incollare testo o estratto dal PDF */}
+              {showRawPasteInput && (
+                <div className="mt-2 p-3 bg-slate-950 rounded-lg border border-slate-800 space-y-2">
+                  <div className="text-[11px] text-slate-400 flex items-center justify-between">
+                    <span>Incolla il testo copiato direttamente dal PDF Sisal o da altre lavagne quote:</span>
+                    <span className="font-mono text-[10px] text-slate-500">Supporta codici Sisal, decimali con virgola o punto</span>
+                  </div>
+                  <textarea
+                    rows={3}
+                    value={rawPastedText}
+                    onChange={(e) => setRawPastedText(e.target.value)}
+                    placeholder="1375 10/10 15:00 Genoa Fiorentina 3,25 3,25 2,25 1,75 1,95 1,72 2,00&#10;1373 10/10 18:00 Inter Parma 1,13 9,00 20,00..."
+                    className="w-full p-2 bg-slate-900 border border-slate-700 rounded text-xs text-slate-200 font-mono focus:outline-none focus:border-emerald-500"
+                  />
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => handleScrapeOdds()}
+                      className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-medium cursor-pointer"
+                    >
+                      Elabora Testo Incollato
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* BANNER INFORMATIVO DI CONFRONTO: BOOKMAKER ATTUALE (SISAL) VS DATABASE STORICO */}
+            <div className="p-3.5 bg-gradient-to-r from-slate-950 via-slate-900 to-slate-950 border border-slate-800 rounded-xl space-y-2.5">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                {/* Bookmaker Quote */}
+                <div className="p-2.5 rounded-lg bg-slate-900/90 border border-slate-800">
+                  <span className="text-[10px] font-mono text-slate-400 block uppercase">Bookmaker Quote Attuali</span>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <span className="font-bold text-white text-sm">
+                      {scrapedFeedInfo ? scrapedFeedInfo.bookmaker : 'Sisal Matchpoint'}
+                    </span>
+                    <span className="px-1.5 py-0.2 rounded text-[9px] bg-emerald-950 text-emerald-300 border border-emerald-800 font-mono">
+                      Volantino PDF
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-slate-400 block mt-0.5">
+                    Fonte esterna rispetto al database storico
+                  </span>
+                </div>
+
+                {/* Filtro Partite con Storico */}
+                <div className="p-2.5 rounded-lg bg-emerald-950/30 border border-emerald-800/60">
+                  <span className="text-[10px] font-mono text-emerald-400 block uppercase font-semibold">
+                    Filtro Storico Database (Attivo)
+                  </span>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <span className="font-bold text-emerald-200 text-sm font-mono">
+                      {dbFilterResult.stats.matchedCount} su {dbFilterResult.stats.totalScraped} partite
+                    </span>
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                  </div>
+                  <span className="text-[11px] text-emerald-300/80 block mt-0.5">
+                    Storico presente in archivio per entrambe le squadre
+                  </span>
+                </div>
+
+                {/* Partite Escluse */}
+                <div className="p-2.5 rounded-lg bg-slate-900/90 border border-slate-800">
+                  <span className="text-[10px] font-mono text-slate-400 block uppercase">Partite Escluse dal Modello</span>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <span className="font-bold text-slate-300 text-sm font-mono">
+                      {dbFilterResult.stats.excludedCount} partite
+                    </span>
+                    {dbFilterResult.stats.excludedCount > 0 && (
+                      <span className="px-1.5 py-0.2 rounded text-[9px] bg-amber-950 text-amber-300 border border-amber-800 font-mono">
+                        Senza Storico
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[11px] text-slate-400 block mt-0.5">
+                    Escluse per assenza di storico (es. Serie B/C/estere)
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 text-[11px] text-slate-400 border-t border-slate-800/80 pt-2">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>
+                  <strong>Valutazioni analitiche rigorose:</strong> Expected Value (+EV%), Fair Odds Poissoniane, Discrepanze Over/Under e Correlazioni sono calcolate <strong>esclusivamente sulle {dbFilterResult.stats.matchedCount} partite con storico verificato</strong> nel database.
+                </span>
+              </div>
+            </div>
+
+            {/* TAB E LISTA DELLE PARTITE CON RIFERIMENTI STATISTICI O PARTITE ESCLUSE */}
+            <div className="space-y-3 pt-1">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-800">
+                <div className="flex items-center gap-2">
+                  <Flame className="w-4 h-4 text-amber-400" />
+                  <h4 className="text-xs font-bold text-white uppercase tracking-wider font-mono">
+                    Partite con Riferimenti Statistici Più Evidenti & Interessanti (+EV)
+                  </h4>
+                </div>
+
+                {/* Filtri categoria */}
+                <div className="inline-flex rounded-lg border border-slate-800 bg-slate-950 p-0.5 text-xs font-mono flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setScrapedFilterCategory('all')}
+                    className={`px-2.5 py-1 rounded transition-colors cursor-pointer ${
+                      scrapedFilterCategory === 'all'
+                        ? 'bg-slate-800 text-white font-semibold'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Tutte con Storico ({scrapedEvaluations.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setScrapedFilterCategory('value')}
+                    className={`px-2.5 py-1 rounded transition-colors cursor-pointer ${
+                      scrapedFilterCategory === 'value'
+                        ? 'bg-emerald-950 text-emerald-400 font-semibold'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Solo Value Bets (+EV)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setScrapedFilterCategory('over_under')}
+                    className={`px-2.5 py-1 rounded transition-colors cursor-pointer ${
+                      scrapedFilterCategory === 'over_under'
+                        ? 'bg-amber-950 text-amber-400 font-semibold'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Over / Under
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setScrapedFilterCategory('draws')}
+                    className={`px-2.5 py-1 rounded transition-colors cursor-pointer ${
+                      scrapedFilterCategory === 'draws'
+                        ? 'bg-purple-950 text-purple-400 font-semibold'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Pareggi (X)
+                  </button>
+                  {excludedMatches.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setScrapedFilterCategory('excluded')}
+                      className={`px-2.5 py-1 rounded transition-colors cursor-pointer ${
+                        scrapedFilterCategory === 'excluded'
+                          ? 'bg-rose-950 text-rose-300 font-semibold'
+                          : 'text-slate-400 hover:text-rose-300'
+                      }`}
+                    >
+                      Senza Storico ({excludedMatches.length})
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* SEZIONE 1: VISUALIZZAZIONE PARTITE ESCLUSE (SE SELEZIONATA LA TAB "SENZA STORICO") */}
+              {scrapedFilterCategory === 'excluded' ? (
+                <div className="space-y-3">
+                  <div className="p-3 bg-rose-950/20 border border-rose-900/50 rounded-lg text-xs text-rose-200 flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-bold">Partite estratte dal Volantino Sisal ma prive di storico nel database:</span>
+                      <p className="text-[11px] text-slate-300 mt-0.5 leading-relaxed">
+                        Queste partite compaiono nel volantino Sisal ma sono state escluse dalle valutazioni analitiche (+EV, xG, Poisson e simulatore) perché le relative formazioni (es. leghe minori come Serie B, Serie C o estere) non hanno partite nello storico del database.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {excludedMatches.map((item) => (
+                      <div
+                        key={item.match.id}
+                        className="p-3.5 rounded-xl border border-rose-900/40 bg-slate-950/80 flex flex-col justify-between"
+                      >
+                        <div>
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-[10px] font-mono text-slate-400">
+                              {item.match.competition} · {item.match.date} {item.match.time ? `ore ${item.match.time}` : ''}
+                            </span>
+                            <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-rose-950 text-rose-300 border border-rose-800">
+                              ESCLUSA DAL MODELLO
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between font-bold text-sm text-slate-200 mb-2 pb-2 border-b border-slate-800">
+                            <span>{item.match.homeTeam}</span>
+                            <span className="text-slate-500 text-xs font-mono font-normal mx-2">vs</span>
+                            <span>{item.match.awayTeam}</span>
+                          </div>
+
+                          <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800 mb-2.5 text-xs text-slate-300">
+                            <span className="font-semibold text-rose-300 block mb-0.5">Motivo dell'esclusione:</span>
+                            <p className="text-[11px] text-slate-400 leading-relaxed">{item.reason}</p>
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-2 font-mono text-xs mb-2 text-center opacity-75">
+                            <div className="p-1 rounded bg-slate-900 border border-slate-800">
+                              <span className="text-[9px] text-slate-500 block">1 Sisal</span>
+                              <span className="font-bold text-slate-300">@{item.match.homeOdds.toFixed(2)}</span>
+                            </div>
+                            <div className="p-1 rounded bg-slate-900 border border-slate-800">
+                              <span className="text-[9px] text-slate-500 block">X Sisal</span>
+                              <span className="font-bold text-slate-300">@{item.match.drawOdds.toFixed(2)}</span>
+                            </div>
+                            <div className="p-1 rounded bg-slate-900 border border-slate-800">
+                              <span className="text-[9px] text-slate-500 block">2 Sisal</span>
+                              <span className="font-bold text-slate-300">@{item.match.awayOdds.toFixed(2)}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="text-[10px] font-mono text-slate-500 text-center py-1 bg-slate-900/40 rounded border border-slate-800/50 mt-1">
+                          Nessun dato xG / Poisson affidabile per questo match
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                /* SEZIONE 2: GRID DELLE PARTITE FILTRATE CON STORICO NEL DATABASE */
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {filteredScrapedEvaluations.map((item, idx) => {
+                    const m = item.match;
+                    const h = item.primaryHighlight;
+                    const isTopOpportunity = idx === 0 || item.bestValueEvPct >= 8.0;
+
+                    return (
+                      <div
+                        key={m.id}
+                        className={`p-3.5 rounded-xl border flex flex-col justify-between transition-all ${
+                          isTopOpportunity
+                            ? 'bg-gradient-to-b from-slate-900 to-slate-950 border-emerald-500/40 shadow-sm shadow-emerald-950/20'
+                            : 'bg-slate-950/80 border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        <div>
+                          {/* Top bar card con badge storico database e badge evidenza */}
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-[10px] font-mono text-slate-400">
+                                {m.competition} · {m.date} {m.time ? `ore ${m.time}` : ''}
+                              </span>
+                              <span className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-sky-950 text-sky-300 border border-sky-800 font-semibold" title="Presenza verificata nel database storico">
+                                ✓ Storico DB ({item.historicalMatchesCount} gare)
+                              </span>
+                            </div>
+
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                                h.color === 'emerald'
+                                  ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-700/60'
+                                  : h.color === 'amber'
+                                  ? 'bg-amber-950/90 text-amber-300 border border-amber-700/60'
+                                  : h.color === 'cyan'
+                                  ? 'bg-cyan-950/90 text-cyan-300 border border-cyan-700/60'
+                                  : 'bg-purple-950/90 text-purple-300 border border-purple-700/60'
+                              }`}
+                            >
+                              {h.badgeLabel}
+                            </span>
+                          </div>
+
+                          {/* Squadre */}
+                          <div className="flex items-center justify-between font-bold text-sm text-white mb-2 pb-2 border-b border-slate-800/80">
+                            <span>{m.homeTeam}</span>
+                            <span className="text-slate-500 text-xs font-mono font-normal mx-2">vs</span>
+                            <span>{m.awayTeam}</span>
+                          </div>
+
+                          {/* Evidenza Statistica Principale Spiegata */}
+                          <div className="p-2.5 rounded-lg bg-slate-900/90 border border-slate-800 mb-2.5">
+                            <div className="text-xs font-bold text-slate-200 mb-0.5 flex items-center justify-between">
+                              <span>{h.title}</span>
+                              <span className="font-mono text-emerald-400">
+                                {item.bestValueEvPct > 0 ? `+${item.bestValueEvPct}% EV` : `${item.bestValueEvPct}% EV`}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-400 font-sans leading-relaxed">
+                              {h.description}
+                            </p>
+                          </div>
+
+                          {/* Quote Sisal vs Fair Model Odds */}
+                          <div className="grid grid-cols-3 gap-2 font-mono text-xs mb-3 text-center">
+                            <div className="p-1.5 rounded bg-slate-900 border border-slate-800">
+                              <span className="text-[10px] text-slate-400 block font-sans">1 (Sisal)</span>
+                              <span className="font-bold text-white block">@{m.homeOdds.toFixed(2)}</span>
+                              <span className="text-[9px] text-slate-500 block">Equa: @{item.fairHomeOdds.toFixed(2)}</span>
+                            </div>
+                            <div className="p-1.5 rounded bg-slate-900 border border-slate-800">
+                              <span className="text-[10px] text-slate-400 block font-sans">X (Sisal)</span>
+                              <span className="font-bold text-white block">@{m.drawOdds.toFixed(2)}</span>
+                              <span className="text-[9px] text-slate-500 block">Equa: @{item.fairDrawOdds.toFixed(2)}</span>
+                            </div>
+                            <div className="p-1.5 rounded bg-slate-900 border border-slate-800">
+                              <span className="text-[10px] text-slate-400 block font-sans">2 (Sisal)</span>
+                              <span className="font-bold text-white block">@{m.awayOdds.toFixed(2)}</span>
+                              <span className="text-[9px] text-slate-500 block">Equa: @{item.fairAwayOdds.toFixed(2)}</span>
+                            </div>
+                          </div>
+
+                          {/* Altri mercati Sisal (Under/Over e GG) se disponibili */}
+                          {(m.over25Odds || m.under25Odds || m.bttsYesOdds) && (
+                            <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 px-1 mb-3">
+                              {m.over25Odds && (
+                                <span>Over 2.5: <strong className="text-slate-200">@{m.over25Odds.toFixed(2)}</strong> <span className="text-[9px] text-slate-500">(Equa @{item.fairOver25Odds.toFixed(2)})</span></span>
+                              )}
+                              {m.under25Odds && (
+                                <span>Under 2.5: <strong className="text-slate-200">@{m.under25Odds.toFixed(2)}</strong> <span className="text-[9px] text-slate-500">(Equa @{item.fairUnder25Odds.toFixed(2)})</span></span>
+                              )}
+                              {m.bttsYesOdds && (
+                                <span>GG: <strong className="text-slate-200">@{m.bttsYesOdds.toFixed(2)}</strong></span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* CTA button per simulare e approfondire immediatamente questo match */}
+                        <button
+                          type="button"
+                          onClick={() => handleSelectScrapedMatch(item)}
+                          className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold font-sans flex items-center justify-center gap-1.5 transition-colors shadow-sm cursor-pointer"
+                        >
+                          <span>Simula & Approfondisci nel Dettaglio</span>
+                          <ArrowRightLeft className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Header card with Team Selectors & Random Picker */}
-      <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 shadow-sm">
+      <div id="match-simulator-engine-section" className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 shadow-sm scroll-mt-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-1.5">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
@@ -1061,14 +1873,17 @@ export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
 
       {/* Historical Verification of Outcomes with These Specific Odds */}
       <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 shadow-sm">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-800">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shrink-0">
               <History className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-white tracking-tight">
-                Verifica Storico Risultati nel Dataset con Quote Simili
+              <h3 className="text-sm font-bold text-white tracking-tight flex items-center gap-2">
+                <span>Verifica Storico Risultati nel Dataset con Quote Simili</span>
+                <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-mono font-medium">
+                  {historicalOddsStats.includedMarketsLabel || '1X2 (Base)'}
+                </span>
               </h3>
               <p className="text-xs text-slate-400">
                 Analisi empirica di tutte le partite storiche giocate con quote analoghe: confronto tra frequenza reale di uscita, probabilità implicita e rendimento (ROI).
@@ -1090,9 +1905,9 @@ export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
                     ? 'bg-slate-800 text-emerald-400 font-semibold shadow-sm'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
-                title="Tolleranza stretta: scarto max ±0.10"
+                title="Tolleranza ultra-stretta e rigorosa: scarto max ±0.05 (1), ±0.08 (X), ±0.10 (2)"
               >
-                Stretta (±0.10)
+                Ultra-Stretta (±0.05/0.10)
               </button>
               <button
                 type="button"
@@ -1102,9 +1917,9 @@ export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
                     ? 'bg-slate-800 text-emerald-400 font-semibold shadow-sm'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
-                title="Tolleranza standard: scarto max ±0.20"
+                title="Tolleranza stretta e mirata: scarto max ±0.10 (1), ±0.12 (X), ±0.15 (2)"
               >
-                Standard (±0.20)
+                Stretta Mirata (±0.10/0.15)
               </button>
               <button
                 type="button"
@@ -1114,9 +1929,9 @@ export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
                     ? 'bg-slate-800 text-emerald-400 font-semibold shadow-sm'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
-                title="Tolleranza ampia: scarto max ±0.35"
+                title="Tolleranza moderata e controllata: scarto max ±0.18 (1), ±0.22 (X), ±0.26 (2)"
               >
-                Ampia (±0.35)
+                Moderata (±0.18/0.26)
               </button>
               <button
                 type="button"
@@ -1126,11 +1941,76 @@ export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
                     ? 'bg-slate-800 text-emerald-400 font-semibold shadow-sm'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
-                title="Fascia di mercato per favorita"
+                title="Fascia di quota ristretta dinamica in base alla favorita"
               >
-                Fascia Mercato
+                Fascia Ristretta
               </button>
             </div>
+          </div>
+        </div>
+
+        {/* Selettore Mercati per la Valutazione & Vincolo di Tolleranza */}
+        <div className="mt-3.5 p-3 bg-slate-950/80 rounded-lg border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
+          <div className="space-y-0.5">
+            <div className="font-mono text-slate-300 font-medium flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Mercati Inclusi nel Vincolo di Tolleranza (Min. 2 Quote Coincidenti):</span>
+            </div>
+            <p className="text-[11px] text-slate-400">
+              Il confronto avviene di base su <strong>1X2</strong> (le coppie nella tolleranza sono verificate tra 1, X, 2). Scegli se includere anche Under/Over o Goal.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 shrink-0 font-mono text-xs">
+            {/* 1X2 Base (Sempre attivo) */}
+            <div className="px-2.5 py-1.5 rounded-md bg-slate-900 border border-emerald-500/40 text-emerald-300 font-semibold flex items-center gap-1.5 shadow-sm cursor-default">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+              <span>1X2 (Base)</span>
+            </div>
+
+            {/* Toggle Under / Over 2.5 */}
+            <button
+              type="button"
+              onClick={() => setIncludeOverUnderInOddsCheck(!includeOverUnderInOddsCheck)}
+              className={`px-2.5 py-1.5 rounded-md border text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm ${
+                includeOverUnderInOddsCheck
+                  ? 'bg-amber-500/20 border-amber-500/60 text-amber-300'
+                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+              }`}
+              title="Includi Over 2.5 e Under 2.5 nella verifica quote e vincolo di tolleranza"
+            >
+              <div
+                className={`w-2 h-2 rounded-full ${
+                  includeOverUnderInOddsCheck ? 'bg-amber-400' : 'bg-slate-600'
+                }`}
+              />
+              <span>Under / Over 2.5</span>
+              <span className="text-[10px] text-slate-500 font-sans font-normal">
+                {includeOverUnderInOddsCheck ? '(Attivo)' : '(Opzionale)'}
+              </span>
+            </button>
+
+            {/* Toggle Goal / No Goal */}
+            <button
+              type="button"
+              onClick={() => setIncludeGoalNoGoalInOddsCheck(!includeGoalNoGoalInOddsCheck)}
+              className={`px-2.5 py-1.5 rounded-md border text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm ${
+                includeGoalNoGoalInOddsCheck
+                  ? 'bg-purple-500/20 border-purple-500/60 text-purple-300'
+                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+              }`}
+              title="Includi Goal (BTTS Sì) e No Goal (BTTS No) nella verifica quote e vincolo di tolleranza"
+            >
+              <div
+                className={`w-2 h-2 rounded-full ${
+                  includeGoalNoGoalInOddsCheck ? 'bg-purple-400' : 'bg-slate-600'
+                }`}
+              />
+              <span>Goal / No Goal</span>
+              <span className="text-[10px] text-slate-500 font-sans font-normal">
+                {includeGoalNoGoalInOddsCheck ? '(Attivo)' : '(Opzionale)'}
+              </span>
+            </button>
           </div>
         </div>
 
@@ -1482,7 +2362,7 @@ export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
                       : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
-                  Prob. Condizionate
+                  Condizionali ({coherentConditionalProbs.length})
                 </button>
                 <button
                   type="button"
@@ -1493,7 +2373,7 @@ export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
                       : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
-                  Pattern ({applicablePatterns.length})
+                  Pattern Coerenti ({applicablePatterns.length})
                 </button>
                 <button
                   type="button"
@@ -1504,7 +2384,7 @@ export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
                       : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
-                  Correlazioni
+                  Correlazioni Coerenti ({coherentStatisticalCorrelations.length})
                 </button>
               </div>
             </div>
@@ -1654,112 +2534,375 @@ export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
               </div>
             )}
 
-            {/* Content for Market Conditional Probabilities */}
-            {(paramsSubTab === 'all' || paramsSubTab === 'conditionals') && conditionalProbs.length > 0 && (
+            {/* Content for Market Conditional Probabilities (FILTRATE SOLO PER LO SCENARIO COERENTE CON IL MATCH) */}
+            {(paramsSubTab === 'all' || paramsSubTab === 'conditionals') && (
               <div className="bg-slate-950 rounded-xl p-4 border border-slate-800/90 space-y-2.5 font-mono text-xs">
                 <div className="flex items-center justify-between text-xs pb-2 border-b border-slate-800 font-sans">
                   <span className="font-semibold text-white flex items-center gap-1.5">
                     <Sparkles className="w-4 h-4 text-purple-400" />
-                    <span>Probabilità Condizionate & Correlazioni tra Mercati</span>
+                    <span>Probabilità Condizionate Coerenti con lo Scenario Partita</span>
                   </span>
-                  <span className="text-[11px] text-slate-500">
-                    Frequenza empirica vs baseline modello
+                  <span className="text-[11px] text-purple-300 font-mono">
+                    {coherentConditionalProbs.length} correlazioni compatibili con le quote inserite
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-                  {conditionalProbs.slice(0, 4).map((cp) => (
-                    <div key={cp.id} className="p-2.5 bg-slate-900/80 rounded-lg border border-slate-800 flex flex-col justify-between">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-emerald-400 font-bold">{cp.formulaSymbol}</span>
-                        <span className="text-slate-300 font-bold text-xs">{cp.empiricalPct}% empirica</span>
+                {coherentConditionalProbs.length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                    {coherentConditionalProbs.map((cp) => (
+                      <div key={cp.id} className="p-2.5 bg-slate-900/80 rounded-lg border border-slate-800 flex flex-col justify-between">
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-emerald-400 font-bold">{cp.formulaSymbol}</span>
+                            <span className="text-slate-300 font-bold text-xs">{cp.empiricalPct}% empirica</span>
+                          </div>
+                          <div className="text-[11px] text-slate-400 font-sans mb-1.5 leading-snug">
+                            {cp.condition} → <strong>{cp.targetEvent}</strong>
+                          </div>
+                        </div>
+                        <div className="mt-2 space-y-1">
+                          <div className="p-1.5 rounded bg-slate-950 border border-slate-800/80 text-[10px] text-cyan-300 font-sans">
+                            ⚡ {cp.marketSignal}
+                          </div>
+                          <div className="text-[9px] text-emerald-400/90 font-sans flex items-center gap-1">
+                            <span>✓ Scenario compatibile con le quote di questo match</span>
+                          </div>
+                        </div>
                       </div>
-                      <div className="text-[11px] text-slate-400 font-sans mb-1.5 leading-snug">
-                        {cp.condition} → <strong>{cp.targetEvent}</strong>
-                      </div>
-                      <div className="p-1.5 rounded bg-slate-950 border border-slate-800/80 text-[10px] text-cyan-300 font-sans">
-                        ⚡ {cp.marketSignal}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-4 bg-slate-900/50 rounded-lg border border-slate-800/80 text-center text-slate-400 font-sans text-xs">
+                    <p className="font-semibold text-slate-300 mb-0.5">Nessuna probabilità condizionata asimmetrica per questo scenario</p>
+                    <p className="text-[11px] text-slate-500">I mercati secondari di questo match risultano conformi ai parametri statistici ordinari.</p>
+                  </div>
+                )}
               </div>
             )}
 
-            {/* Content for Profitable Market Patterns */}
-            {(paramsSubTab === 'all' || paramsSubTab === 'patterns') && applicablePatterns.length > 0 && (
+            {/* Content for Profitable Market Patterns (FILTRATI RIGOROSAMENTE PER QUOTE E SQUADRE COMPATIBILI) */}
+            {(paramsSubTab === 'all' || paramsSubTab === 'patterns') && (
               <div className="bg-slate-950 rounded-xl p-4 border border-slate-800/90 font-mono text-xs">
                 <div className="flex items-center justify-between text-xs pb-2 border-b border-slate-800 font-sans mb-2.5">
                   <span className="font-semibold text-white flex items-center gap-1.5">
                     <Zap className="w-4 h-4 text-amber-400" />
-                    <span>Pattern Profittevoli Registrati Applicabili al Match</span>
+                    <span>Pattern Profittevoli Registrati Coerenti con la Partita</span>
                   </span>
                   <span className="text-[11px] text-emerald-400 font-mono font-semibold">
-                    Strategie con ROI positivo in archivio
+                    {applicablePatterns.length > 0 ? `${applicablePatterns.length} strategie coerenti attive` : 'Nessuna anomalia attiva'}
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-                  {applicablePatterns.map((pat: ProfitableMarketPattern) => (
-                    <div key={pat.id} className="p-3 bg-slate-900 rounded-lg border border-slate-800 flex flex-col justify-between">
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-white font-bold font-sans text-xs">{pat.marketType}</span>
-                          <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-950/80 text-emerald-400 border border-emerald-800/60 font-bold">
-                            +{pat.roiPct}% ROI
-                          </span>
+                {applicablePatterns.length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                    {applicablePatterns.map((pat: ProfitableMarketPattern) => (
+                      <div key={pat.id} className="p-3 bg-slate-900 rounded-lg border border-slate-800 flex flex-col justify-between">
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-white font-bold font-sans text-xs">{pat.marketType}</span>
+                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-950/80 text-emerald-400 border border-emerald-800/60 font-bold">
+                              +{pat.roiPct}% ROI
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-400 font-sans mb-2 leading-relaxed">
+                            {pat.description}
+                          </p>
                         </div>
-                        <p className="text-[11px] text-slate-400 font-sans mb-2 leading-relaxed">
-                          {pat.description}
-                        </p>
+                        <div className="space-y-1.5 pt-1.5 border-t border-slate-800 text-[11px] text-slate-400">
+                          <div className="flex items-center justify-between">
+                            <span>Win Rate: <strong className="text-slate-200">{pat.winRatePct}%</strong> ({pat.wonBets}/{pat.totalBets})</span>
+                            <span>Quota media: <strong className="text-cyan-400">@{pat.avgOdds.toFixed(2)}</strong></span>
+                          </div>
+                          <div className="text-[9px] text-emerald-400 font-sans font-medium flex items-center gap-1">
+                            <span>✓ Coerente con quota / fascia di questo specifico incontro</span>
+                          </div>
+                        </div>
                       </div>
-                      <div className="flex items-center justify-between text-[11px] pt-1.5 border-t border-slate-800 text-slate-400">
-                        <span>Win Rate: <strong className="text-slate-200">{pat.winRatePct}%</strong> ({pat.wonBets}/{pat.totalBets})</span>
-                        <span>Quota media: <strong className="text-cyan-400">@{pat.avgOdds.toFixed(2)}</strong></span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-4 bg-slate-900/50 rounded-lg border border-slate-800/80 text-center text-slate-400 font-sans text-xs">
+                    <p className="font-semibold text-slate-300 mb-0.5">
+                      Nessun pattern profittevole anomalo per le quote specifiche di questa partita
+                    </p>
+                    <p className="text-[11px] text-slate-500">
+                      Le quote impostate (@1: {customOdds.homeOdds || 'auto'} / @X: {customOdds.drawOdds || 'auto'} / @2: {customOdds.awayOdds || 'auto'}) non evidenziano asimmetrie storiche sfruttabili nel database: i prezzi offerti dal bookmaker rientrano nella corretta efficienza di mercato.
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 
-            {/* Content for Statistical Correlations */}
-            {(paramsSubTab === 'all' || paramsSubTab === 'correlations') && statisticalCorrelations.length > 0 && (
+            {/* Content for Statistical Correlations (FILTRATE PER RILEVANZA CON IL MATCH) */}
+            {(paramsSubTab === 'all' || paramsSubTab === 'correlations') && (
               <div className="bg-slate-950 rounded-xl p-4 border border-slate-800/90 font-mono text-xs">
                 <div className="flex items-center justify-between text-xs pb-2 border-b border-slate-800 font-sans mb-2.5">
                   <span className="font-semibold text-white flex items-center gap-1.5">
                     <TrendingUp className="w-4 h-4 text-cyan-400" />
-                    <span>Abbinamenti e Correlazioni Statistiche Chiave</span>
+                    <span>Abbinamenti e Correlazioni Statistiche Coerenti</span>
                   </span>
-                  <span className="text-[11px] text-slate-500">
-                    Pearson (r) & Spearman (ρ)
+                  <span className="text-[11px] text-cyan-300 font-mono">
+                    {coherentStatisticalCorrelations.length} correlazioni applicabili
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
-                  {statisticalCorrelations.slice(0, 3).map((sc) => (
-                    <div key={sc.id} className="p-2.5 bg-slate-900 rounded-lg border border-slate-800 flex flex-col justify-between">
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-emerald-400 font-bold text-[11px]">{sc.targetMarket}</span>
-                          <span className="text-slate-300 font-bold">r = {sc.pearsonR}</span>
+                {coherentStatisticalCorrelations.length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                    {coherentStatisticalCorrelations.map((sc) => (
+                      <div key={sc.id} className="p-2.5 bg-slate-900 rounded-lg border border-slate-800 flex flex-col justify-between">
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-emerald-400 font-bold text-[11px]">{sc.targetMarket}</span>
+                            <span className="text-slate-300 font-bold">r = {sc.pearsonR}</span>
+                          </div>
+                          <div className="text-[11px] text-slate-300 font-sans font-medium mb-1">
+                            {sc.featureA} ↔ {sc.featureB}
+                          </div>
+                          <p className="text-[10px] text-slate-400 font-sans leading-tight mb-2">
+                            {sc.interpretation}
+                          </p>
                         </div>
-                        <div className="text-[11px] text-slate-300 font-sans font-medium mb-1">
-                          {sc.featureA} ↔ {sc.featureB}
+                        <div className="text-[9px] text-cyan-400 font-sans pt-1 border-t border-slate-800">
+                          <span>✓ Compatibile con i mercati e i volumi della gara</span>
                         </div>
-                        <p className="text-[10px] text-slate-400 font-sans leading-tight mb-2">
-                          {sc.interpretation}
-                        </p>
+                        <div className="mt-1 p-1.5 rounded bg-slate-950 border border-slate-800 text-[10px] text-emerald-300 font-sans">
+                          💡 {sc.bettingImplication}
+                        </div>
                       </div>
-                      <div className="p-1.5 rounded bg-slate-950 border border-slate-800 text-[10px] text-emerald-300 font-sans">
-                        💡 {sc.bettingImplication}
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-4 bg-slate-900/50 rounded-lg border border-slate-800/80 text-center text-slate-400 font-sans text-xs">
+                    <p className="font-semibold text-slate-300 mb-0.5">Nessuna correlazione statistica attiva</p>
+                    <p className="text-[11px] text-slate-500">I dati statistici disponibili non evidenziano relazioni lineari anomale per questo matchup.</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          {/* Model Selector: Poisson Dixon-Coles vs Monte Carlo Stochastic Simulation */}
+          <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0">
+                  <Dices className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white tracking-tight flex items-center gap-2">
+                    <span>Motore di Calcolo & Simulazione Pronostici</span>
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-mono font-medium border ${
+                        simulationMethod === 'montecarlo'
+                          ? 'bg-purple-950/80 text-purple-300 border-purple-800/80'
+                          : 'bg-emerald-950/80 text-emerald-300 border-emerald-800/80'
+                      }`}
+                    >
+                      {simulationMethod === 'montecarlo' ? 'Metodo Monte Carlo Attivo' : 'Modello Poisson Attivo'}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Scegli tra la distribuzione analitica Poisson Dixon-Coles o la simulazione stocastica Monte Carlo (migliaia di match simulati ad alta frequenza).
+                  </p>
+                </div>
+              </div>
+
+              {/* Engine Switcher Buttons */}
+              <div className="inline-flex rounded-lg border border-slate-800 bg-slate-950 p-1 text-xs font-mono shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setSimulationMethod('poisson')}
+                  className={`px-3 py-1.5 rounded-md transition-all flex items-center gap-1.5 ${
+                    simulationMethod === 'poisson'
+                      ? 'bg-slate-800 text-emerald-400 font-semibold shadow-sm border border-emerald-500/30'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Calculator className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Poisson Bivariato (Dixon-Coles)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSimulationMethod('montecarlo')}
+                  className={`px-3 py-1.5 rounded-md transition-all flex items-center gap-1.5 ${
+                    simulationMethod === 'montecarlo'
+                      ? 'bg-purple-950/90 text-purple-300 font-semibold shadow-sm border border-purple-500/40'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Dices className="w-3.5 h-3.5 text-purple-400" />
+                  <span>Simulazione Monte Carlo</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Monte Carlo Specific Controls and Telemetry */}
+            {simulationMethod === 'montecarlo' && monteCarloSimulation && (
+              <div className="space-y-4 pt-1">
+                {/* Control bar: Iterations and Re-run */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-purple-950/20 border border-purple-800/40 rounded-lg text-xs font-mono">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-purple-300 font-semibold flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-purple-400" /> Iterazioni Simulate:
+                    </span>
+                    <div className="inline-flex rounded-md border border-slate-800 bg-slate-950 p-0.5 text-xs">
+                      {[5000, 10000, 25000, 50000].map((runs) => (
+                        <button
+                          key={runs}
+                          type="button"
+                          onClick={() => setMonteCarloRuns(runs)}
+                          className={`px-2.5 py-1 rounded transition-colors ${
+                            monteCarloRuns === runs
+                              ? 'bg-purple-900/60 text-purple-200 font-bold border border-purple-600/50'
+                              : 'text-slate-400 hover:text-slate-200'
+                          }`}
+                        >
+                          {runs.toLocaleString()} run
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setMonteCarloSeed((s) => s + 1)}
+                    className="px-3 py-1.5 bg-purple-900/40 hover:bg-purple-800/60 border border-purple-700/60 rounded-md text-xs font-medium text-purple-200 hover:text-white flex items-center gap-1.5 transition-all shadow-sm self-start sm:self-auto"
+                    title="Esegui una nuova simulazione Monte Carlo con un nuovo seme stocastico"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 text-purple-300" />
+                    <span>Riesegui Simulazione Stocastica</span>
+                  </button>
+                </div>
+
+                {/* Monte Carlo Statistics KPI Grid */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 font-mono text-xs">
+                  {/* Home Mean Goals & 95% CI */}
+                  <div className="p-3 bg-slate-950 rounded-lg border border-slate-800/90">
+                    <div className="text-[11px] text-slate-400 font-sans mb-1 flex items-center justify-between">
+                      <span className="truncate">Gol Medi {homeTeam}</span>
+                      <span className="text-[10px] text-emerald-400">CI 95%</span>
+                    </div>
+                    <div className="text-lg font-bold text-emerald-400 tabular-nums">
+                      {monteCarloSimulation.homeGoalsMean}
+                      <span className="text-xs text-slate-500 font-normal ml-1">±{monteCarloSimulation.homeGoalsStdDev}</span>
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-1">
+                      Range: [{monteCarloSimulation.homeGoalsCI95[0]} - {monteCarloSimulation.homeGoalsCI95[1]}]
+                    </div>
+                  </div>
+
+                  {/* Away Mean Goals & 95% CI */}
+                  <div className="p-3 bg-slate-950 rounded-lg border border-slate-800/90">
+                    <div className="text-[11px] text-slate-400 font-sans mb-1 flex items-center justify-between">
+                      <span className="truncate">Gol Medi {awayTeam}</span>
+                      <span className="text-[10px] text-cyan-400">CI 95%</span>
+                    </div>
+                    <div className="text-lg font-bold text-cyan-400 tabular-nums">
+                      {monteCarloSimulation.awayGoalsMean}
+                      <span className="text-xs text-slate-500 font-normal ml-1">±{monteCarloSimulation.awayGoalsStdDev}</span>
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-1">
+                      Range: [{monteCarloSimulation.awayGoalsCI95[0]} - {monteCarloSimulation.awayGoalsCI95[1]}]
+                    </div>
+                  </div>
+
+                  {/* Clean Sheet Percentages */}
+                  <div className="p-3 bg-slate-950 rounded-lg border border-slate-800/90">
+                    <div className="text-[11px] text-slate-400 font-sans mb-1">Clean Sheet Stimati</div>
+                    <div className="text-lg font-bold text-slate-200 tabular-nums">
+                      {monteCarloSimulation.homeCleanSheetPct}% <span className="text-xs text-slate-500 font-normal">/</span> {monteCarloSimulation.awayCleanSheetPct}%
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-1">
+                      Casa vs Ospite a porta inviolata
+                    </div>
+                  </div>
+
+                  {/* Convergence Standard Error */}
+                  <div className="p-3 bg-slate-950 rounded-lg border border-slate-800/90">
+                    <div className="text-[11px] text-slate-400 font-sans mb-1">Errore Margine / Convergenza</div>
+                    <div className="text-lg font-bold text-purple-400 tabular-nums">
+                      ±{monteCarloSimulation.convergenceMarginErrorPct}%
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-1">
+                      Campione: {monteCarloSimulation.iterations.toLocaleString()} iterazioni
+                    </div>
+                  </div>
+                </div>
+
+                {/* Model Comparison Callout: Monte Carlo vs Poisson Baseline */}
+                {poissonSimulation && (
+                  <div className="p-3 bg-slate-950/90 rounded-lg border border-slate-800 text-xs font-mono">
+                    <div className="flex items-center justify-between mb-2 text-[11px] font-sans">
+                      <span className="font-semibold text-slate-300 flex items-center gap-1.5">
+                        <Scale className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Confronto Comparativo: Simulazione Monte Carlo vs Poisson Dixon-Coles</span>
+                      </span>
+                      <span className="text-slate-500 text-[10px]">Delta stocastico rilevato</span>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center text-[11px]">
+                      <div className="p-1.5 bg-slate-900 rounded border border-slate-800">
+                        <span className="text-slate-400 block text-[10px] font-sans">1 ({homeTeam})</span>
+                        <span className="font-bold text-emerald-400">{monteCarloSimulation.homeWinProb}%</span>
+                        <span className="text-[9px] text-slate-500 block">
+                          P: {poissonSimulation.homeWinProb}% ({monteCarloSimulation.homeWinProb >= poissonSimulation.homeWinProb ? '+' : ''}{(monteCarloSimulation.homeWinProb - poissonSimulation.homeWinProb).toFixed(1)}%)
+                        </span>
+                      </div>
+                      <div className="p-1.5 bg-slate-900 rounded border border-slate-800">
+                        <span className="text-slate-400 block text-[10px] font-sans">X (Pareggio)</span>
+                        <span className="font-bold text-slate-200">{monteCarloSimulation.drawProb}%</span>
+                        <span className="text-[9px] text-slate-500 block">
+                          P: {poissonSimulation.drawProb}% ({monteCarloSimulation.drawProb >= poissonSimulation.drawProb ? '+' : ''}{(monteCarloSimulation.drawProb - poissonSimulation.drawProb).toFixed(1)}%)
+                        </span>
+                      </div>
+                      <div className="p-1.5 bg-slate-900 rounded border border-slate-800">
+                        <span className="text-slate-400 block text-[10px] font-sans">2 ({awayTeam})</span>
+                        <span className="font-bold text-cyan-400">{monteCarloSimulation.awayWinProb}%</span>
+                        <span className="text-[9px] text-slate-500 block">
+                          P: {poissonSimulation.awayWinProb}% ({monteCarloSimulation.awayWinProb >= poissonSimulation.awayWinProb ? '+' : ''}{(monteCarloSimulation.awayWinProb - poissonSimulation.awayWinProb).toFixed(1)}%)
+                        </span>
+                      </div>
+                      <div className="p-1.5 bg-slate-900 rounded border border-slate-800">
+                        <span className="text-slate-400 block text-[10px] font-sans">Over 2.5 Gol</span>
+                        <span className="font-bold text-amber-400">{monteCarloSimulation.over25Prob}%</span>
+                        <span className="text-[9px] text-slate-500 block">
+                          P: {poissonSimulation.over25Prob}% ({monteCarloSimulation.over25Prob >= poissonSimulation.over25Prob ? '+' : ''}{(monteCarloSimulation.over25Prob - poissonSimulation.over25Prob).toFixed(1)}%)
+                        </span>
+                      </div>
+                      <div className="p-1.5 bg-slate-900 rounded border border-slate-800 col-span-2 sm:col-span-1">
+                        <span className="text-slate-400 block text-[10px] font-sans">Goal (BTTS)</span>
+                        <span className="font-bold text-purple-400">{monteCarloSimulation.bothTeamsScoreProb}%</span>
+                        <span className="text-[9px] text-slate-500 block">
+                          P: {poissonSimulation.bothTeamsScoreProb}% ({monteCarloSimulation.bothTeamsScoreProb >= poissonSimulation.bothTeamsScoreProb ? '+' : ''}{(monteCarloSimulation.bothTeamsScoreProb - poissonSimulation.bothTeamsScoreProb).toFixed(1)}%)
+                        </span>
                       </div>
                     </div>
-                  ))}
+                  </div>
+                )}
+
+                {/* Histogram of simulated total goals */}
+                <div className="p-3 bg-slate-950/80 rounded-lg border border-slate-800">
+                  <div className="text-[11px] font-mono text-slate-400 mb-2 flex items-center justify-between">
+                    <span>Distribuzione Empirica delle Reti Totali nel Match (0 - 7+ Gol)</span>
+                    <span className="text-[10px] text-purple-400 font-mono">Frequenze su {monteCarloSimulation.iterations.toLocaleString()} gare</span>
+                  </div>
+                  <div className="grid grid-cols-4 sm:grid-cols-8 gap-1.5 font-mono text-center">
+                    {monteCarloSimulation.goalsDistribution.map((item) => (
+                      <div key={item.goals} className="p-2 bg-slate-900 rounded border border-slate-800/80">
+                        <span className="text-[10px] text-slate-500 block">{item.goals === 7 ? '7+ Gol' : `${item.goals} Gol`}</span>
+                        <span className="text-xs font-bold text-slate-200 block mt-0.5">{item.percentage}%</span>
+                        <div className="w-full h-1 bg-slate-800 rounded-full mt-1.5 overflow-hidden">
+                          <div
+                            className="h-full bg-purple-500 rounded-full"
+                            style={{ width: `${Math.min(100, item.percentage * 3.5)}%` }}
+                          ></div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             )}
           </div>
+
           {/* Main Simulation Probability Overview */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Col 1 & 2: Main Odds and Probability Breakdown */}
@@ -1767,7 +2910,9 @@ export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
               {/* Expected Goals & Primary Outcomes Card */}
               <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 shadow-sm">
                 <div className="text-xs font-mono text-slate-500 uppercase tracking-wider mb-3">
-                  Aspettativa Reti (Expected Goals Model)
+                  {simulationMethod === 'montecarlo'
+                    ? `Aspettativa Reti (Simulazione Monte Carlo · ${monteCarloSimulation?.iterations.toLocaleString()} Run)`
+                    : 'Aspettativa Reti (Expected Goals Model Poisson)'}
                 </div>
 
                 {/* Big Scoreline Expected Bar */}
@@ -1775,7 +2920,10 @@ export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
                   <div className="text-left">
                     <div className="text-lg font-bold text-slate-100">{homeTeam}</div>
                     <div className="text-2xl font-extrabold font-mono text-emerald-400 tabular-nums">
-                      {simulation.expectedHomeGoals} <span className="text-xs font-sans text-slate-400 font-normal">xG attesi</span>
+                      {simulation.expectedHomeGoals}{' '}
+                      <span className="text-xs font-sans text-slate-400 font-normal">
+                        {simulationMethod === 'montecarlo' ? 'gol medi simulati' : 'xG attesi'}
+                      </span>
                     </div>
                   </div>
 
@@ -1786,7 +2934,10 @@ export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
                   <div className="text-right">
                     <div className="text-lg font-bold text-slate-100">{awayTeam}</div>
                     <div className="text-2xl font-extrabold font-mono text-cyan-400 tabular-nums">
-                      {simulation.expectedAwayGoals} <span className="text-xs font-sans text-slate-400 font-normal">xG attesi</span>
+                      {simulation.expectedAwayGoals}{' '}
+                      <span className="text-xs font-sans text-slate-400 font-normal">
+                        {simulationMethod === 'montecarlo' ? 'gol medi simulati' : 'xG attesi'}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -1913,11 +3064,13 @@ export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
                     Risultati Esatti Più Probabili
                   </div>
                   <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800/60">
-                    Dixon-Coles (τ)
+                    {simulationMethod === 'montecarlo' ? 'Monte Carlo Empirico' : 'Dixon-Coles (τ)'}
                   </span>
                 </div>
                 <p className="text-xs text-slate-400 mb-4">
-                  Distribuzione multivariata con correzione Dixon-Coles (1997) per punteggi bassi (0-0, 1-0, 0-1, 1-1).
+                  {simulationMethod === 'montecarlo'
+                    ? `Frequenze empiriche calcolate su ${monteCarloSimulation?.iterations.toLocaleString()} iterazioni stocastiche con dinamica di gioco.`
+                    : 'Distribuzione multivariata con correzione Dixon-Coles (1997) per punteggi bassi (0-0, 1-0, 0-1, 1-1).'}
                 </p>
 
                 <div className="space-y-2.5 font-mono">
@@ -1981,7 +3134,7 @@ export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
                   <h3 className="text-sm font-bold text-white tracking-tight flex items-center gap-2">
                     <span>Laboratorio Calci d'Angolo ad Ampio Range (6.5 - 14.5) & Quote Eque</span>
                     <span className="px-1.5 py-0.5 rounded bg-amber-950/80 text-amber-400 border border-amber-800/80 text-[10px] font-mono">
-                      Poisson Multivariato
+                      {simulationMethod === 'montecarlo' ? 'Monte Carlo Angoli' : 'Poisson Multivariato'}
                     </span>
                   </h3>
                   <p className="text-xs text-slate-400">
@@ -2165,12 +3318,25 @@ export const MatchSimulatorView: React.FC<MatchSimulatorViewProps> = ({
                   <span className="p-1 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
                     <Sparkles className="w-4 h-4" />
                   </span>
-                  <h3 className="text-sm font-bold text-white tracking-tight">
-                    Offerta Completa Pronostici & Indicazione Quota Minima di Riferimento (+EV)
-                  </h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold text-white tracking-tight">
+                      Offerta Completa Pronostici & Indicazione Quota Minima di Riferimento (+EV)
+                    </h3>
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-mono font-medium border ${
+                        simulationMethod === 'montecarlo'
+                          ? 'bg-purple-950/80 text-purple-300 border-purple-800/80'
+                          : 'bg-emerald-950/80 text-emerald-300 border-emerald-800/80'
+                      }`}
+                    >
+                      {simulationMethod === 'montecarlo' ? 'Generati da Monte Carlo' : 'Generati da Poisson'}
+                    </span>
+                  </div>
                 </div>
                 <p className="text-xs text-slate-400">
-                  Per ciascun mercato, il modello calcola la probabilità intrinseca, la quota equa e stabilisce la <strong>quota minima di riferimento</strong> necessaria per avere un Valore Atteso (+EV) positivo sul bookmaker.
+                  {simulationMethod === 'montecarlo'
+                    ? `Pronostici derivati empiricamente da ${monteCarloSimulation?.iterations.toLocaleString()} iterazioni stocastiche. Escluse tassativamente quote utili < 1.30.`
+                    : 'Per ciascun mercato, il modello Poisson calcola la probabilità intrinseca, la quota equa e stabilisce la quota minima di riferimento per valore positivo (+EV). Escluse quote < 1.30.'}
                 </p>
               </div>
 
